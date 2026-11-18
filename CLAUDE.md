@@ -21,6 +21,7 @@
 | 数据库 | SQLite（`backend/storage/app.db`） | 单文件、零运维；表结构见 `docs/ARCHITECTURE.md` |
 | 检索 | **零外部 Embedding 依赖**的本地混合检索 | BM25 + TF-IDF 稀疏向量本地实现；稠密向量可选但不强制 |
 | 视频队列 | 单并发 + `asyncio.Lock()` | 全局一把锁，排队 FIFO |
+| 视频合成 | 大模型分镜脚本 + edge-tts + Remotion / HyperFrames | 复用 design/tokens.css 渲染 MP4；script→tts→render→mux 全程零 Mock |
 | 前端 | React + TypeScript + Tailwind CSS | 编辑型工作台审美见 `DESIGN.md` / `design/tokens.css` |
 | LLM | 通过 `LLM_BASE_URL` 调用（OpenAI 兼容协议） | Key 只经 `.env` 注入，禁止硬编码 |
 
@@ -57,13 +58,13 @@
 | --- | --- | --- | --- | --- |
 | **架构 / 编排（本 Session）** | 全部 | 根、`docs/`、`design/`、`CLAUDE.md` | — | — |
 | **前端开发 Agent** | `DESIGN.md`、`design/tokens.css`、`design/tokens.json`、`docs/API_SPEC.md`、`CLAUDE.md` | `frontend/` | **`docs/EVAL.md`**、`evals/`、`backend/app/`、`backend/tests/` | `backend/`、`docs/`、`design/`、`evals/` |
-| **后端开发 Agent** | `docs/ARCHITECTURE.md`、`docs/API_SPEC.md`、`CLAUDE.md`、`知识库_文本版/00_索引.md` | `backend/app/`、`backend/tests/`、`scripts/` | **`docs/EVAL.md`**、`evals/`、`frontend/` | `frontend/`、`docs/`、`design/`、`evals/` |
+| **后端开发 Agent** | `docs/ARCHITECTURE.md`、`docs/API_SPEC.md`、`CLAUDE.md`、`知识库/`（只读语料） | `backend/app/`、`backend/tests/`、`scripts/` | **`docs/EVAL.md`**、`evals/`、`frontend/` | `frontend/`、`docs/`、`design/`、`evals/` |
 | **Eval 验收 Agent** | `docs/EVAL.md`、`docs/API_SPEC.md`、`CLAUDE.md` | `evals/`、`evals/reports/` | —（可全读，但只写评估产物） | `backend/app/`、`frontend/`（只报告不实现） |
 
 补充约定：
 
 - 目录修改禁区以"严禁写入"列为准；跨区改动必须经架构角色评审。
-- `知识库/`、`知识库_文本版/` 为只读语料，任何 Agent 不得改写原文。
+- `知识库/` 为只读语料（`知识库_文本版/` 派生语料已于 Session 2 删除），任何 Agent 不得改写原文。
 - `.env` 为本地密钥，任何 Agent 不得提交、不得在日志中打印。
 
 ## 六、提交规范

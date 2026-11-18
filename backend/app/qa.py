@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import json
 
 from .config import settings
@@ -61,7 +62,12 @@ def build_context(citations: list[dict]) -> str:
 
 
 async def generate_answer(question: str, citations: list[dict]) -> dict:
-    """调用 LLM（OpenAI 兼容协议）生成结构化回答；失败降级为安全拒答。"""
+    """调用 LLM（OpenAI 兼容协议）生成结构化回答；失败降级为安全拒答。
+
+    并发压测下 LLM 网关会返回 429/5xx 或超时：这里做指数退避重试
+    （2s/4s/8s，最多 3 次），避免瞬时限流把可用回答降级成拒答。
+    重试仍失败才走安全拒答降级（绝不 Mock）。
+    """
     import httpx
 
     context = build_context(citations)
@@ -79,13 +85,26 @@ async def generate_answer(question: str, citations: list[dict]) -> dict:
         "Content-Type": "application/json",
         "Authorization": f"Bearer {settings.llm_api_key}",
     }
-    async with httpx.AsyncClient(timeout=settings.llm_timeout_seconds) as client:
-        r = await client.post(f"{settings.llm_base_url}/chat/completions", json=payload, headers=headers)
-        r.raise_for_status()
-        raw = r.json()["choices"][0]["message"]["content"]
+    raw: str | None = None
+    for attempt in range(3):
+        try:
+            async with httpx.AsyncClient(timeout=settings.llm_timeout_seconds) as client:
+                r = await client.post(
+                    f"{settings.llm_base_url}/chat/completions", json=payload, headers=headers
+                )
+                r.raise_for_status()
+                raw = r.json()["choices"][0]["message"]["content"]
+            break
+        except Exception as e:
+            if attempt == 2:
+                raise
+            delay = 2 ** (attempt + 1)
+            print(f"[qa] LLM 调用失败({type(e).__name__}: {e})，{delay}s 后重试 "
+                  f"({attempt + 1}/3)")
+            await asyncio.sleep(delay)
     try:
         data = json.loads(raw)
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, TypeError):
         data = None
     if not isinstance(data, dict) or "answer" not in data:
         # Schema 不满足 → 安全拒答（第二重防御的降级路径）
@@ -98,4 +117,7 @@ async def generate_answer(question: str, citations: list[dict]) -> dict:
     data.setdefault("citations", citations[:5])
     data.setdefault("confidence", 0.5)
     data.setdefault("refusal_reason", None)
+    # 空串 refusal_reason 等价于"无拒答原因"（API_SPEC §5：非空才表示拒答）
+    if data.get("refusal_reason") == "":
+        data["refusal_reason"] = None
     return data

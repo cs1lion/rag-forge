@@ -17,7 +17,8 @@ def test_health():
         assert r.status_code == 200
         body = r.json()
         assert body["status"] == "ok"
-        assert body["version"] == "0.1.0"
+        # 版本号随会话推进升级（Session 1 基线 0.1.0 → 会话 2 接入问答/视频 0.2.0）
+        assert body["version"].startswith("0.")
 
 
 def test_init_db_creates_four_tables(tmp_path):

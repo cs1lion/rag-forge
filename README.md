@@ -1,37 +1,69 @@
-# 知识库问答与自动问答视频生成工作台
+# rag-forge
 
-上传文档 → 基于知识库问答（带引用溯源）→ 自动生成问答视频；单并发视频队列、全局排队。
+> 知识库问答与自动问答视频生成工作台（RAG 全栈项目）
 
-## 入口
+一个典型的 RAG（检索增强生成）全栈项目：**知识库问答 + 引用溯源 + 自动问答视频生成工作台**。
 
-| 文件 | 作用 |
+Upload documents → the system parses and indexes them → ask questions and get answers **grounded in your knowledge base, with per-paragraph citations** → every Q&A is turned into a short narrated video, rendered through a global single-concurrency FIFO queue.
+
+Stack: FastAPI + SQLite · local hybrid retrieval (BM25 + TF-IDF, zero external embedding dependency) · dual prompt-injection defense · SSE progress streaming · React + TypeScript + Tailwind workbench · video pipeline (LLM storyboard → edge-tts narration → Remotion/PIL rendering → ffmpeg muxing).
+
+## ✨ Features
+
+- **Document ingestion, 3-level fault-tolerant parsing** — `.md` / `.docx` (pure-stdlib OOXML) / `.doc` (UTF-16 stream extraction, LibreOffice conversion fallback).
+- **Local hybrid retrieval** — BM25 + TF-IDF sparse vectors computed in-process; no external embedding service.
+- **Mandatory citation tracing** — every answer carries `doc_id` + source filename + `heading_path` + `para_id`.
+- **Dual prompt-injection defense** — injection-signature paragraphs are quarantined at ingest (never enter the retrieval corpus); retrieved context is XML-isolated from instructions; LLM output is JSON-Schema-constrained with a safe-degradation fallback.
+- **Q&A video generation** — LLM storyboard (rule-based fallback) → edge-tts / OpenAI TTS narration → Remotion rendering (PIL+ffmpeg fallback) → ffmpeg muxing; visual style reuses `design/tokens.css`.
+- **Global single-concurrency video queue** — `asyncio.Lock` + DB state machine, `running ≤ 1`, FIFO promotion, real-time progress + queue position over SSE.
+- **Editorial-style workbench UI** — React + TypeScript + Tailwind, design-token driven (`DESIGN.md` is the single source of truth).
+- **Real data only** — no mocks anywhere; tests run the full ingest → retrieve → QA → video chain against the real corpus.
+
+## 🗂 Repository layout
+
+| Path | What |
 | --- | --- |
-| `CLAUDE.md` | 全局研发宪法 + 多 Agent 路由表（含盲测隔离禁区） |
-| `DESIGN.md` | 编辑型工作台设计规范（设计令牌唯一事实来源） |
-| `docs/ARCHITECTURE.md` | 系统架构：4 张表 / 三级容错解析 / 混合检索 / 双重防注入 / 视频队列 |
-| `docs/API_SPEC.md` | REST + SSE 前后端对齐契约 |
-| `docs/EVAL.md` | ★盲测黄金评估集（14 条用例；前端/后端 Agent 禁读） |
-| `design/tokens.css` / `tokens.json` | 设计令牌实体文件（由 DESIGN.md 生成，三方校验一致） |
-| `docs/SESSION_LOG.md` | 全流程 AI 协作 Session 记录 |
+| `backend/` | FastAPI app: parsers, ingestion, hybrid retrieval, QA orchestration, SSE, video queue, Remotion renderer |
+| `frontend/` | React + TypeScript + Tailwind workbench (Vite + Vitest) |
+| `知识库/` | Read-only source corpus the demo actually runs on |
+| `design/` | Design tokens (`tokens.css` / `tokens.json`), generated from `DESIGN.md` |
+| `docs/` | ARCHITECTURE / API_SPEC / EVAL (blind-test gold set) / SESSION_LOG (dev-process record) |
+| `evals/` | Eval acceptance runner (`run_eval.py`); reports are gitignored |
+| `scripts/` | Token consistency check, corpus inspection helpers |
 
-## 运行（基线验证）
+## 🚀 Quick start
 
 ```bash
-# 后端
-cd backend && pip install -r requirements.txt
-cp ../.env.example .env   # 填 LLM_API_KEY 等
-python -m uvicorn app.main:app --port 8000     # GET /health
-python -m pytest -q                            # 冒烟测试
+# 1. Backend
+cd backend
+pip install -r requirements.txt
+cp ../.env.example .env   # fill LLM_API_KEY / LLM_BASE_URL (OpenAI-compatible)
+python -m uvicorn app.main:app --port 8000   # GET /health; startup auto-ingests 知识库/
 
-# 令牌三方一致性校验（任意目录）
-python scripts/check_tokens.py
+# 2. Frontend
+cd ../frontend
+npm install
+npm run dev        # http://localhost:5173
+
+# 3. Verify
+cd ../backend && python -m pytest -q      # full backend suite
+python scripts/check_tokens.py            # DESIGN.md / tokens.css / tokens.json 3-way check
 ```
 
-## 工程铁律（摘要，详见 CLAUDE.md §三）
+## 🧪 Quality gates (project constitution, `CLAUDE.md` §三)
 
-严禁 Mock 数据 ｜ 全局单并发视频队列锁 ｜ 核心业务逻辑单测覆盖率 ≥ 85% ｜ 引用溯源强制 ｜ 防注入强制。
+- No mock data anywhere — tests exercise the real chain end to end.
+- Global single-concurrency video queue lock (`running ≤ 1`, FIFO).
+- Unit-test coverage on core logic (parsers, chunking, retrieval, citation, QA, queue).
+- Citation tracing mandatory; prompt-injection defense mandatory.
+- Blind-test isolation: `docs/EVAL.md` (14-case gold set) is read only by the eval-acceptance role.
 
-## 状态
+## 📖 Development process
 
-Session 1 基线已锁定：`chore: initialize project specs, design tokens and EDD eval dataset`（commit 113a821）。
-业务实现（解析/检索/问答/视频队列）按 `docs/ARCHITECTURE.md` 与 `docs/API_SPEC.md` 在后续会话迭代。
+`docs/SESSION_LOG.md` records every session's goals, key decisions and artifacts (spec-first baseline → ingestion/parsing → retrieval/QA → video pipeline → frontend workbench → blind eval). `docs/ARCHITECTURE.md` and `docs/API_SPEC.md` are the architecture and API contracts; `DESIGN.md` the design spec.
+
+## ⚠️ Notes
+
+- The LLM key lives only in `.env` (gitignored); it is never logged or echoed.
+- The corpus `知识库/` is a demo set of Chinese education / company-intro documents; replace it with your own.
+- Video rendering prefers Remotion (needs Node + Chrome headless) and automatically falls back to PIL + ffmpeg.

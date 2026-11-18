@@ -1,8 +1,13 @@
 """应用配置：只从环境变量 / .env 读取，禁止硬编码密钥。
 
 字段与 .env.example 一一对应；LLM 走 OpenAI 兼容协议（LLM_BASE_URL）。
+.env 位于项目根目录（本文件的上两级），用绝对路径定位，避免受 cwd 影响。
 """
+from pathlib import Path
+
 from pydantic_settings import BaseSettings
+
+_ROOT = Path(__file__).resolve().parents[2]  # 项目根目录
 
 
 class Settings(BaseSettings):
@@ -28,13 +33,22 @@ class Settings(BaseSettings):
     video_queue_max_concurrent: int = 1
     video_queue_max_queue: int = 50
 
+    # TTS（视频配音）：edge-tts（免费、免 Key）或 openai
+    tts_provider: str = "edge-tts"
+    openai_tts_api_key: str = ""
+    openai_tts_voice: str = "alloy"
+    edge_tts_voice: str = "zh-CN-XiaoxiaoNeural"
+
     # 存储
     storage_uploads_dir: str = "storage/uploads"
     storage_videos_dir: str = "storage/videos"
     database_url: str = "sqlite:///storage/app.db"
 
+    # 前端
+    frontend_port: int = 5173
+
     class Config:
-        env_file = ".env"
+        env_file = str(_ROOT / ".env")
         env_file_encoding = "utf-8"
 
 

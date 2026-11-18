@@ -15,7 +15,19 @@ _TOKEN_RE = re.compile(r"[一-鿿]+|[a-zA-Z0-9]+")
 
 
 def tokenize(text: str) -> list[str]:
-    return _TOKEN_RE.findall(text or "")
+    """中文 CJK bigram + 英文/数字整词（与 ingestion.tokenize 同源）。"""
+    tokens: list[str] = []
+    for m in _TOKEN_RE.finditer(text or ""):
+        s = m.group()
+        if re.match(r"^[一-鿿]+$", s):
+            if len(s) <= 2:
+                tokens.append(s)
+            else:
+                for i in range(len(s) - 1):
+                    tokens.append(s[i : i + 2])
+        else:
+            tokens.append(s)
+    return tokens
 
 
 def _bm25_score(tf: dict, dl: int, avg_dl: float, k1: float = 1.5, b: float = 0.75) -> float:
@@ -36,9 +48,11 @@ def hybrid_search(question: str, *, top_k: int = 5) -> list[dict]:
         qtf[t] = qtf.get(t, 0) + 1
 
     with get_conn() as conn:
+        # JOIN documents 补齐溯源四件套中的 doc_title / source_file（引用卡片展示用）
         rows = conn.execute(
-            "SELECT doc_id, para_id, heading_path, block_type, text, chars, bm25_vec,"
-            " tfidf_vec FROM chunks"
+            "SELECT c.doc_id, c.para_id, c.heading_path, c.block_type, c.text, c.chars,"
+            " c.bm25_vec, c.tfidf_vec, d.title AS doc_title, d.source_file"
+            " FROM chunks c JOIN documents d ON d.doc_id = c.doc_id"
         ).fetchall()
         if not rows:
             return []
@@ -67,6 +81,8 @@ def hybrid_search(question: str, *, top_k: int = 5) -> list[dict]:
                 scored.append(
                     {
                         "doc_id": r["doc_id"],
+                        "doc_title": r["doc_title"],
+                        "source_file": r["source_file"],
                         "para_id": r["para_id"],
                         "heading_path": r["heading_path"],
                         "block_type": r["block_type"],

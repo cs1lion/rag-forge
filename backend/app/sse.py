@@ -8,6 +8,8 @@ from typing import Any
 from fastapi import Request
 from fastapi.responses import StreamingResponse
 
+from .db import get_conn
+
 _subs: set[asyncio.Queue] = set()
 
 
@@ -21,14 +23,28 @@ async def broadcast(event: str, data: dict[str, Any]) -> None:
 
 
 def on_video_progress(task_id: int, stage: str, progress: float) -> None:
-    """video_queue 回调 → video.progress / video.done / video.failed 事件。"""
+    """video_queue 回调 → video.progress / video.done / video.failed 事件。
+
+    video.done 携带 API_SPEC §6 要求的 video_url（产物下载路径）；
+    video.failed 的 error 为任务失败原因（从 video_tasks.error 读，而非 stage）。
+    """
     if stage == "done":
+        with get_conn() as conn:
+            t = conn.execute(
+                "SELECT video_path FROM video_tasks WHERE id = ?", (task_id,)
+            ).fetchone()
+        video_url = f"/api/videos/{task_id}/file" if t and t["video_path"] else None
         asyncio.get_event_loop().call_soon(
-            lambda: broadcast("video.done", {"task_id": task_id, "progress": 1.0})
+            lambda: broadcast("video.done", {"task_id": task_id, "progress": 1.0, "video_url": video_url})
         )
     elif stage == "failed":
+        with get_conn() as conn:
+            t = conn.execute(
+                "SELECT error FROM video_tasks WHERE id = ?", (task_id,)
+            ).fetchone()
+        err = (t and t["error"]) or stage
         asyncio.get_event_loop().call_soon(
-            lambda: broadcast("video.failed", {"task_id": task_id, "error": stage})
+            lambda: broadcast("video.failed", {"task_id": task_id, "error": str(err)})
         )
     else:
         asyncio.get_event_loop().call_soon(

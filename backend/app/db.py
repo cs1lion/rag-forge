@@ -35,6 +35,18 @@ CREATE TABLE IF NOT EXISTS chunks (
 );
 CREATE INDEX IF NOT EXISTS idx_chunks_doc ON chunks(doc_id);
 
+CREATE TABLE IF NOT EXISTS injection_excerpts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    doc_id TEXT NOT NULL REFERENCES documents(doc_id) ON DELETE CASCADE,
+    para_id TEXT NOT NULL,
+    heading_path TEXT NOT NULL DEFAULT '',
+    block_type TEXT NOT NULL DEFAULT 'text',
+    text TEXT NOT NULL,
+    matched_keywords TEXT NOT NULL DEFAULT '[]',
+    created_at TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_inj_doc ON injection_excerpts(doc_id);
+
 CREATE TABLE IF NOT EXISTS qa_records (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     question TEXT NOT NULL,
