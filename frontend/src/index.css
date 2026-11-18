@@ -1,9 +1,23 @@
+/* 设计令牌由 DESIGN.md 经 scripts/gen_tokens.py 生成（唯一事实来源）。
+   实体文件与 design/tokens.css 保持同步，禁手改。 */
+@import "./tokens.css";
+
+/* 中文正文比英文上调一档（DESIGN.md §4）；令牌未覆盖，本地扩展 */
+:root {
+  --text-body-size-zh: 15px;
+}
+
+/* 输入框聚焦 2px 强调色环（DESIGN.md §6） */
+.nb-input {
+  transition: box-shadow var(--duration-fast) var(--ease-out);
+}
+.nb-input:focus-within {
+  box-shadow: 0 0 0 2px var(--nb-accent);
+}
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
-
-/* 设计令牌由 DESIGN.md 经 scripts/gen_tokens.py 生成（唯一事实来源） */
-@import "../../design/tokens.css";
 
 html,
 body {
@@ -17,8 +31,11 @@ body {
 /* 中文正文比英文上调一档（DESIGN.md §4） */
 :lang(zh) body,
 :lang(zh) p,
-:lang(zh) li {
-  font-size: var(--text-body-size-zh);
+:lang(zh) li,
+:lang(zh) h1,
+:lang(zh) h2,
+:lang(zh) span {
+  font-size: var(--text-body-size-zh, 15px);
 }
 
 /* 动效：prefers-reduced-motion 降为 0ms（DESIGN.md §7） */
