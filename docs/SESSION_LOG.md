@@ -13,8 +13,11 @@
    + 单并发视频队列（`asyncio.Lock`）+ React/TypeScript/Tailwind。
 2. 工程铁律入宪：严禁 Mock 数据；全局单并发视频队列锁；核心业务逻辑单测覆盖率 ≥ 85%。
 3. 盲测隔离：`docs/EVAL.md` 为黄金评估集，前端/后端开发 Agent 严禁读取；Eval 验收 Agent 专用。
-4. 设计令牌实体化：`DESIGN.md` 为唯一事实来源 → `design/tokens.css` + `design/tokens.json`，
-   `scripts/check_tokens.py` 三方 100% 一致性校验通过（65 令牌，92/92 CSS 声明一致）。
+4. 设计令牌实体化：`DESIGN.md`（NotebookLM 参考系，v2）为唯一事实来源 →
+   `design/tokens.css` + `design/tokens.json`，`scripts/gen_tokens.py` 从 §3 色板表 +
+   §4 字体层级 + §5 间距圆角 + §7 动效正文提取，`scripts/check_tokens.py` 三方 100% 一致性
+   校验通过（55 令牌：色板 21 + 字号层级 7×多字段 + 间距 10 + 圆角 4 + 描边/阴影 3 + 动效 9；
+   CSS 73/73 声明一致）。
 5. 盲测黄金集：`docs/EVAL.md` 14 条用例（A 单文档事实×3 / B 易混对比×2 / C 跨文档人物并购时间线×3 /
    D 文档内干扰抗性×2 / E 域外边界拒答×2 / F 视频排队压测×2），全部锚定 `知识库/` 真实文档。
 6. 三级容错解析经实测验证：`.md` 直读；`.docx` 纯标准库 OOXML（4 篇全解析成功）；

@@ -1,213 +1,145 @@
-# DESIGN.md — 编辑型工作台设计规范
+# 编辑型工作台设计规范（NotebookLM 参考系）
 
-> 本文件是设计令牌的**唯一事实来源（single source of truth）**。
-> `design/tokens.css` 与 `design/tokens.json` 由 `scripts/gen_tokens.py` 从本文件
-> 的 `tokens` 代码块生成，并由 `scripts/check_tokens.py` 做三方 100% 一致性校验。
-> 任何视觉改动须先改本文件，再重新生成令牌。
+本文件是项目唯一的设计依据。所有页面、幻灯片、图形与视频动效都从这里取值，
+令牌定义在 `design/tokens.css` 与 `design/tokens.json`，三者必须保持一致。
 
-## 1. 设计方向
+> 机器可读性：`scripts/gen_tokens.py` 从本文件 §3 色彩表、§4 字体层级表、
+> §5 间距/圆角/描边/阴影、§7 动效正文提取令牌并生成两个实体文件；
+> `scripts/check_tokens.py` 做三方 100% 一致性校验。改本文件后须重跑生成与校验。
 
-知识库问答与自动问答视频生成工作台，定位为**编辑室（newsroom）气质**的生产力工具：
+## 1. 来源与适用范围
 
-- **纸感**：暖米白底色、细腻分隔线、克制的投影，像摊开的稿纸而不是发光屏幕；
-- **编辑秩序**：清晰的标题层级、充足的留白、段落级引用卡片，信息有"版面"感；
-- **去 AI 味**：不用渐变紫蓝、不用玻璃拟态、不用霓虹辉光；色彩以松绿 + 灯芯琥珀
-  + 陶土点缀为主，像编辑部里的旧台灯与绿皮笔记本；
-- **可编辑感**：任务队列、文档列表像待办稿纸，进度条像排版校样上的墨线。
+- 提取对象：一张 NotebookLM（Gemini Notebook）界面截图，三栏工作台布局。
+- 提取方式：像素目测 + 版式测量，属近似值，见第 10 节可信度说明。
+- 适用：信息密度高、以阅读与生成为主的产品界面、内部工具、研究报告页、说明型视频。
+- 不适用：营销落地页、需要强视觉冲击的品牌站、电商详情页。
 
-## 2. 色板（Color Palette）
+## 2. 风格定位
 
-### 2.1 基础色
-| 令牌 | 值 | 用途 |
+文档优先的编辑型工作台：白底、细线分区、克制的圆角、极低饱和的表面层次，
+彩色只出现在功能图标与少量链接上。视觉信息全部由排版、留白与 1px 描边承担，
+不靠阴影、渐变、插画或装饰图形。整体读起来像阅读器或专业工具，而不是营销页面。
+
+三条不可让渡的原则：
+
+1. 内容优先。任何装饰如果不能让信息更清楚，就不出现。
+2. 层次靠线和留白，不靠阴影和色块堆叠。
+3. 颜色是信号，不是背景。彩色面积不超过屏幕的 5%。
+
+## 3. 色彩
+
+| 角色 | 令牌 | 值 | 用途 |
+| --- | --- | --- | --- |
+| 页面底色 | `--nb-bg` | `#FFFFFF` | 主内容区、卡片 |
+| 次级底 | `--nb-bg-subtle` | `#F7F8F9` | 侧栏、面板底、输入区 |
+| 悬停填充 | `--nb-bg-hover` | `#F0F4F9` | 列表项 hover、选中行 |
+| 描边 | `--nb-border` | `#E1E3E6` | 所有分区线、卡片边框 |
+| 强描边 | `--nb-border-strong` | `#C9CCD1` | 输入框聚焦前、表格线 |
+| 主文字 | `--nb-text` | `#1F1F1F` | 标题、正文主句 |
+| 次文字 | `--nb-text-secondary` | `#444746` | 正文段落 |
+| 说明文字 | `--nb-text-tertiary` | `#5E5E5E` | 元信息、时间、计数 |
+| 强调色 | `--nb-accent` | `#1A73E8` | 链接、主按钮、焦点环 |
+| 强调悬停 | `--nb-accent-hover` | `#1765CC` | 按钮与链接 hover |
+| 强调浅底 | `--nb-accent-soft` | `#E8F0FE` | 选中态、标签底 |
+
+功能色块（用于来源类型、生成物条目的图标底）：底色浅、图标深一档，成对使用。
+
+| 名称 | 底 | 图标 |
 | --- | --- | --- |
-| paper | `#F7F4EE` | 页面底色（暖米白） |
-| surface | `#FDFCFA` | 卡片/面板底色 |
-| surface-raised | `#FFFFFF` | 悬浮层底色 |
-| ink | `#1A1B1E` | 主文字（深墨） |
-| ink-soft | `#3E4348` | 次级文字 |
-| ink-mute | `#6B7280` | 弱化文字 |
-| line | `#E3DED3` | 分隔线/描边（暖灰） |
-| line-strong | `#C9C2B2` | 强调描边 |
+| 琥珀 | `--nb-tint-amber-bg` `#FEF0D3` | `--nb-tint-amber-ink` `#8A5A00` |
+| 紫 | `--nb-tint-violet-bg` `#EDE7FB` | `--nb-tint-violet-ink` `#5B3E9B` |
+| 绿 | `--nb-tint-green-bg` `#E4F3E8` | `--nb-tint-green-ink` `#1E6B3A` |
+| 青 | `--nb-tint-teal-bg` `#DEF1F3` | `--nb-tint-teal-ink` `#0F5F68` |
+| 蓝 | `--nb-tint-blue-bg` `#E3EEFC` | `--nb-tint-blue-ink` `#174EA6` |
 
-### 2.2 品牌色
-| 令牌 | 值 | 用途 |
-| --- | --- | --- |
-| brand | `#2F5D50` | 主色：松绿（按钮、激活态、品牌标识） |
-| brand-deep | `#24483E` | 主色加深（hover、按压） |
-| brand-tint | `#E4EDE8` | 主色浅底（选中态、标签底） |
-| amber | `#C98A2C` | 灯芯琥珀：关键强调、进度高亮 |
-| terracotta | `#B4552D` | 陶土：点缀（视频/媒体相关） |
+规则：正文与背景对比 ≥ 4.5:1，大字号与图标 ≥ 3:1；不得只用颜色区分状态，
+必须同时有文字或图标；深色模式必须单独校验，不能由浅色模式推导。
 
-### 2.3 功能色
-| 令牌 | 值 | 用途 |
-| --- | --- | --- |
-| success | `#3E7C59` | 成功/完成 |
-| warning | `#B97A1F` | 警告/排队中 |
-| danger | `#B3402E` | 失败/错误 |
-| info | `#4A6D8C` | 信息/中性提示（低饱和蓝，避免 AI 感） |
+## 4. 字体与层级
 
-### 2.4 语义色（派生映射）
-| 令牌 | 映射 |
-| --- | --- |
-| text-primary | ink |
-| text-secondary | ink-soft |
-| text-tertiary | ink-mute |
-| bg-base | paper |
-| bg-panel | surface |
-| bg-elevated | surface-raised |
-| border-subtle | line |
-| border-strong | line-strong |
-| interactive | brand |
-| interactive-hover | brand-deep |
-| interactive-bg | brand-tint |
-| accent-highlight | amber |
-| accent-media | terracotta |
+拉丁字符用 Google Sans / Roboto 一类人文无衬线；中文回落到
+`"Noto Sans SC", "PingFang SC", "Microsoft YaHei"`。系统字优先，不引入网络字体。
 
-## 3. 字体层级（Type Scale）
+| 层级 | 字号 | 行高 | 字重 | 颜色 |
+| --- | --- | --- | --- | --- |
+| 页标题 | 24px（`clamp(22px, 2vw, 28px)`） | 1.3 | 500 | 主文字 |
+| 区块标题 | 18px | 1.4 | 500 | 主文字 |
+| 卡片标题 | 15px（中文 16px） | 1.45 | 500 | 主文字 |
+| 正文 | 14px（中文 15–16px） | 1.65 | 400 | 次文字 |
+| 元信息 | 12px | 1.4 | 400 | 说明文字 |
+| 微标签 | 11px | 1.3 | 500 | 说明文字，字距 +0.02em |
 
-字体族：标题用衬线 `Noto Serif SC`（编辑感），正文用无衬线 `Noto Sans SC`，
-等宽用 `JetBrains Mono`（数据/编号）。
+中文正文必须比英文上调一档，否则在小字号下笔画糊在一起。正文行宽控制
+在 32–40 个汉字（约 65–75 字符）之间；移动端 20–24 个汉字。
 
-| 令牌 | 字号 px | 行高 | 字重 | 字体族 | 用途 |
-| --- | --- | --- | --- | --- | --- |
-| display | 32 | 40 | 700 | serif | 工作台大标题 |
-| h1 | 28 | 36 | 700 | serif | 页面主标题 |
-| h2 | 22 | 30 | 600 | serif | 面板标题 |
-| h3 | 18 | 26 | 600 | sans | 小节标题 |
-| h4 | 16 | 24 | 600 | sans | 卡片标题 |
-| body | 15 | 24 | 400 | sans | 正文 |
-| small | 13 | 20 | 400 | sans | 辅助说明 |
-| caption | 12 | 18 | 500 | sans | 标签/角标 |
-| mono | 13 | 20 | 400 | mono | 编号/数据/代码 |
+## 5. 间距、容器与圆角
 
-## 4. 间距基数（Spacing）
+间距基数 4，只用这些值：`4 8 12 16 20 24 32 40 48 64`。
 
-基数 4px，缩放序列：
+- 面板内边距：16–20px；卡片内边距：16–20px；区块间距：24–32px。
+- 三栏尺寸：左侧栏 260px（可折叠）、中栏内容最大宽度 720px 居中、右栏 300px。
+- 圆角：`--nb-radius-sm` 8px（按钮、输入框）、`--nb-radius-md` 12px（卡片）、
+  `--nb-radius-lg` 16px（大图容器）、`--nb-radius-pill` 999px（胶囊按钮）。
+- 描边：统一 1px，颜色 `--nb-border`；不使用 2px 以上边框做装饰。
+- 阴影：默认无。仅浮层（下拉、气泡）用
+  `0 1px 2px rgba(0,0,0,.04), 0 8px 24px rgba(0,0,0,.08)`，其余一律描边分层。
 
-| 令牌 | 值 px |
-| --- | --- |
-| space-1 | 4 |
-| space-2 | 8 |
-| space-3 | 12 |
-| space-4 | 16 |
-| space-5 | 20 |
-| space-6 | 24 |
-| space-8 | 32 |
-| space-10 | 40 |
-| space-12 | 48 |
-| space-16 | 64 |
+布局用 flex/grid 正常流；固定或粘性只用于顶栏与右栏，并为被遮挡内容预留等量内边距。
+内容区不得用绝对定位叠放。
 
-## 5. 圆角（Radius）
+## 6. 组件规则
 
-| 令牌 | 值 px | 用途 |
-| --- | --- | --- |
-| radius-sm | 4 | 小标签/输入框内元素 |
-| radius-md | 8 | 按钮/输入框 |
-| radius-lg | 12 | 卡片 |
-| radius-xl | 16 | 大面板/模态 |
-| radius-pill | 999 | 徽章/进度条 |
+**顶栏**：高 56px，底部 1px 描边；左侧标题 + 星标图标，右侧圆形图标按钮组，
+主操作是胶囊按钮（`+ 创建`），仅一个实心主按钮。
 
-## 6. 阴影（Elevation）
+**侧栏列表**：行高 36–40px，单行截断加省略号，悬停整行填充 `--nb-bg-hover`，
+图标 16px、与文字间距 8px，元信息靠右对齐 12px 说明文字。
 
-| 令牌 | 值 |
-| --- | --- |
-| shadow-sm | `0 1px 2px rgba(26,27,30,0.06)` |
-| shadow-md | `0 4px 12px rgba(26,27,30,0.08)` |
-| shadow-lg | `0 12px 32px rgba(26,27,30,0.12)` |
+**内容卡**：白底 + 1px 描边 + 12px 圆角，无阴影；顶部大图保持原始比例
+（`width:100%; height:auto`），禁止把内容图裁成固定比例；标题与元信息分两行。
 
-## 7. 动效（Motion）
+**生成物条目**：`色块图标（32×32，8px 圆角）+ 标题 14/500 + 一行说明 12px`，
+右侧 16px 箭头图标；条目之间 1px 分隔线，不加卡片外框。
 
-| 令牌 | 值 |
-| --- | --- |
-| duration-fast | 120ms |
-| duration-normal | 240ms |
-| duration-slow | 400ms |
-| ease-out | `cubic-bezier(0.22, 1, 0.36, 1)` |
-| ease-in-out | `cubic-bezier(0.65, 0, 0.35, 1)` |
+**按钮**：主按钮实心 `--nb-accent`、白字、胶囊；次按钮白底 + 描边，悬停填充浅灰；
+图标按钮为 32px 圆形，悬停底色 `--nb-bg-hover`。同一视口只允许一个实心主按钮。
 
-## 8. 布局原则
+**输入框**：`--nb-bg-subtle` 底、无描边或 1px 描边、8px 圆角、聚焦时 2px 强调色环；
+占位文字用说明文字色，光标与选中颜色跟随强调色。
 
-- 三栏工作台：左栏文档库（240px）｜中栏问答与引用（弹性）｜右栏任务队列与历史（320px）；
-- 引用卡片带 `para_id` 定位锚点，点击定位到原文段落；
-- 视频进度用 `amber` 墨线 + `pill` 圆角进度条，排队态用 `warning`。
+**图标**：单一线性图标族，1.5px 描边、圆角端点，尺寸 16/20/24 三档；
+不得在同一层级混用面性与线性图标；不得用表情符号当功能图标。
 
----
+## 7. 动效
 
-## 9. 机器可解析令牌块（source of truth）
+- 悬停/聚焦反馈：150–180ms，`cubic-bezier(.2,0,0,1)`（ease-out）。
+- 面板展开、抽屉：220–280ms，进入 ease-out，退出 60–70% 时长、ease-in。
+- 列表项入场错位：30–40ms 递增，最多 6 项，之后同时进入。
+- 转场只表达状态变化（出现、切换、层级），不做无意义的漂浮、脉冲或视差。
+- 必须支持 `prefers-reduced-motion: reduce`：过渡降为 0ms，保留最终状态。
 
-> `scripts/gen_tokens.py` 只读取本代码块生成 `design/tokens.css` 与 `design/tokens.json`。
+## 8. 中文与内容排版
 
-```tokens
-{
-  "color": {
-    "paper": "#F7F4EE",
-    "surface": "#FDFCFA",
-    "surface-raised": "#FFFFFF",
-    "ink": "#1A1B1E",
-    "ink-soft": "#3E4348",
-    "ink-mute": "#6B7280",
-    "line": "#E3DED3",
-    "line-strong": "#C9C2B2",
-    "brand": "#2F5D50",
-    "brand-deep": "#24483E",
-    "brand-tint": "#E4EDE8",
-    "amber": "#C98A2C",
-    "terracotta": "#B4552D",
-    "success": "#3E7C59",
-    "warning": "#B97A1F",
-    "danger": "#B3402E",
-    "info": "#4A6D8C"
-  },
-  "semantic": {
-    "text-primary": "color.ink",
-    "text-secondary": "color.ink-soft",
-    "text-tertiary": "color.ink-mute",
-    "bg-base": "color.paper",
-    "bg-panel": "color.surface",
-    "bg-elevated": "color.surface-raised",
-    "border-subtle": "color.line",
-    "border-strong": "color.line-strong",
-    "interactive": "color.brand",
-    "interactive-hover": "color.brand-deep",
-    "interactive-bg": "color.brand-tint",
-    "accent-highlight": "color.amber",
-    "accent-media": "color.terracotta"
-  },
-  "font": {
-    "family-serif": "'Noto Serif SC', Georgia, serif",
-    "family-sans": "'Noto Sans SC', system-ui, sans-serif",
-    "family-mono": "'JetBrains Mono', 'SFMono-Regular', monospace"
-  },
-  "type": {
-    "display": { "size": 32, "line-height": 40, "weight": 700, "family": "font.family-serif" },
-    "h1": { "size": 28, "line-height": 36, "weight": 700, "family": "font.family-serif" },
-    "h2": { "size": 22, "line-height": 30, "weight": 600, "family": "font.family-serif" },
-    "h3": { "size": 18, "line-height": 26, "weight": 600, "family": "font.family-sans" },
-    "h4": { "size": 16, "line-height": 24, "weight": 600, "family": "font.family-sans" },
-    "body": { "size": 15, "line-height": 24, "weight": 400, "family": "font.family-sans" },
-    "small": { "size": 13, "line-height": 20, "weight": 400, "family": "font.family-sans" },
-    "caption": { "size": 12, "line-height": 18, "weight": 500, "family": "font.family-sans" },
-    "mono": { "size": 13, "line-height": 20, "weight": 400, "family": "font.family-mono" }
-  },
-  "spacing": {
-    "space-1": 4, "space-2": 8, "space-3": 12, "space-4": 16,
-    "space-5": 20, "space-6": 24, "space-8": 32, "space-10": 40,
-    "space-12": 48, "space-16": 64
-  },
-  "radius": {
-    "radius-sm": 4, "radius-md": 8, "radius-lg": 12, "radius-xl": 16, "radius-pill": 999
-  },
-  "shadow": {
-    "shadow-sm": "0 1px 2px rgba(26,27,30,0.06)",
-    "shadow-md": "0 4px 12px rgba(26,27,30,0.08)",
-    "shadow-lg": "0 12px 32px rgba(26,27,30,0.12)"
-  },
-  "motion": {
-    "duration-fast": "120ms",
-    "duration-normal": "240ms",
-    "duration-slow": "400ms",
-    "ease-out": "cubic-bezier(0.22, 1, 0.36, 1)",
-    "ease-in-out": "cubic-bezier(0.65, 0, 0.35, 1)"
-  }
-}
-```
+- 中文正文 15–16px，行高 1.65–1.75；英文数字用等宽或表格式对齐。
+- 中英混排在中英文之间留 1/4 空格；标点使用全角中文标点。
+- 标题不用长句，超过 22 个汉字换行或拆成主副标题。
+- 元信息格式统一：`12 个来源 · 2024年4月21日`，不用英文逗号与缩写。
+- 空状态、加载态、错误态都必须写成完整句子，不允许空白页或纯图标。
+
+## 9. 不要做
+
+- 不用米色、奶油色、暖橙作为页面底色；不用紫色渐变铺满背景。
+- 不用卡片左侧彩色竖条作为提示样式；不给每个标题配一个图标。
+- 不用发光、玻璃拟态、超大圆角（> 20px）堆砌“高级感”。
+- 不在同一个视图里放多个同级实心按钮。
+- 不用 hover 变灰变浅的方式表示可点击。
+- 不编造数据、指标、用户引述；占位内容必须显式标注为示例。
+- 不把手绘 SVG 小人当装饰。
+
+## 10. 数值可信度
+
+- 实测：三栏宽度关系、行高节奏、圆角档位、描边颜色家族、字号层级比例。
+- 目测近似：全部十六进制值（截图有压缩与色彩配置偏移，误差约 ±3 灰阶）。
+- 推导：中文适配后的字号、tint 图标墨色、聚焦环规格、动效时长区间。
+- 改动约定：品牌色可替换 `--nb-accent` 三档；其余令牌改动必须同步
+  `design/tokens.css`、`design/tokens.json` 与本文件，并记录原因。

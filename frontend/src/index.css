@@ -2,14 +2,31 @@
 @tailwind components;
 @tailwind utilities;
 
-/* 设计令牌由 ../design/tokens.css 生成（DESIGN.md 为唯一事实来源） */
+/* 设计令牌由 DESIGN.md 经 scripts/gen_tokens.py 生成（唯一事实来源） */
 @import "../../design/tokens.css";
 
 html,
 body {
-  background-color: var(--bg-base);
-  color: var(--text-primary);
+  background-color: var(--nb-bg);
+  color: var(--nb-text);
   font-family: var(--font-family-sans);
   font-size: var(--text-body-size);
   line-height: var(--text-body-line-height);
+}
+
+/* 中文正文比英文上调一档（DESIGN.md §4） */
+:lang(zh) body,
+:lang(zh) p,
+:lang(zh) li {
+  font-size: var(--text-body-size-zh);
+}
+
+/* 动效：prefers-reduced-motion 降为 0ms（DESIGN.md §7） */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0ms !important;
+    animation-duration: 0ms !important;
+  }
 }
