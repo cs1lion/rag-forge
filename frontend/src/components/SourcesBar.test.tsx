@@ -63,4 +63,47 @@ describe("SourcesBar 引用卡片", () => {
     expect(screen.getByText("段落定位：doc06#p002")).toBeInTheDocument();
     expect(screen.queryByText("段落定位：doc05#p041")).not.toBeInTheDocument();
   });
+
+  it("引用文档带 injection_flag=1 时展示琥珀色风险提示", () => {
+    const risky: Citation = { ...citation, injection_flag: 1 };
+    render(<SourcesBar citations={[risky]} />);
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+    expect(screen.getByText(/含疑似越权指令文本的文档/)).toBeInTheDocument();
+  });
+
+  it("无注入特征的来源不展示风险提示", () => {
+    const safe: Citation = { ...citation, injection_flag: 0 };
+    render(<SourcesBar citations={[safe]} />);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("qa.citations 下发的 risk_warnings 单独展示风险提示", () => {
+    render(
+      <SourcesBar
+        citations={[citation]}
+        riskWarnings={[{ doc_id: "doc05", source_file: "众赢.docx", risk_warning: "检测到疑似提示词注入指令，已自动过滤" }]}
+      />,
+    );
+    expect(screen.getByRole("alert").textContent).toContain("众赢.docx（检测到疑似提示词注入指令，已自动过滤）");
+  });
+
+  it("原文档已删除仍直接渲染历史快照，不依赖文档详情接口", async () => {
+    const user = userEvent.setup();
+    const snapshot: Citation = {
+      ...citation,
+      doc_id: "已删除的doc05",
+      doc_title: "",
+      source_file: "",
+      filename: "众赢历史快照.docx",
+      heading_path: "历史 > 五、研发体系与投入",
+      para_id: "doc05#p041",
+      snippet: "历史回答时保存的原文摘录。",
+    };
+    render(<SourcesBar citations={[snapshot]} />);
+    expect(screen.getByText("众赢历史快照.docx")).toBeInTheDocument();
+    await user.click(screen.getByRole("option"));
+    expect(screen.getByText("原文文件：众赢历史快照.docx")).toBeInTheDocument();
+    expect(screen.getByText("章节路径：历史 > 五、研发体系与投入")).toBeInTheDocument();
+    expect(screen.getByText("历史回答时保存的原文摘录。")).toBeInTheDocument();
+  });
 });

@@ -5,13 +5,15 @@
 import { QuestionBox } from "./QuestionBox";
 import { SourcesBar } from "./SourcesBar";
 import { AnswerView } from "./AnswerView";
-import type { Citation } from "../types";
+import type { Citation, RiskWarning } from "../types";
 import type { QaProgressState } from "../hooks/useWorkbench";
 
 interface MainPanelProps {
   question: string;
   answer: string;
   citations: Citation[];
+  riskWarnings?: RiskWarning[];
+  noDocSelected?: boolean;
   progress: QaProgressState | null;
   isAsking: boolean;
   refusalReason: string | null;
@@ -24,7 +26,12 @@ interface MainPanelProps {
 export function MainPanel(props: MainPanelProps) {
   return (
     <div style={{ width: "100%", maxWidth: 720, display: "flex", flexDirection: "column", gap: "var(--space-24)" }}>
-      <QuestionBox onAsk={props.onAsk} disabled={props.isAsking} examples={props.examples} />
+      <QuestionBox
+        onAsk={props.onAsk}
+        disabled={props.isAsking}
+        noDocSelected={props.noDocSelected}
+        examples={props.examples}
+      />
 
       <div
         style={{
@@ -39,7 +46,7 @@ export function MainPanel(props: MainPanelProps) {
       >
         {props.question ? (
           <>
-            <SourcesBar citations={props.citations} />
+            <SourcesBar citations={props.citations} riskWarnings={props.riskWarnings} />
             <AnswerView
               question={props.question}
               answer={props.answer}

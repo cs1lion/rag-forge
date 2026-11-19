@@ -9,14 +9,18 @@ import { Icon } from "./Icon";
 interface QuestionBoxProps {
   onAsk: (question: string) => void;
   disabled: boolean;
+  /** 文档库有文档但全部取消勾选时，禁止发送并展示固定提示 */
+  noDocSelected?: boolean;
   examples: string[];
 }
 
-export function QuestionBox({ onAsk, disabled, examples }: QuestionBoxProps) {
+export function QuestionBox({ onAsk, disabled, noDocSelected = false, examples }: QuestionBoxProps) {
   const [value, setValue] = useState("");
+  const selectionBlocked = noDocSelected && !disabled;
+  const cannotSubmit = disabled || noDocSelected || !value.trim();
 
   const submit = () => {
-    if (!value.trim() || disabled) return;
+    if (cannotSubmit) return;
     onAsk(value);
     setValue("");
   };
@@ -44,6 +48,7 @@ export function QuestionBox({ onAsk, disabled, examples }: QuestionBoxProps) {
           }}
           placeholder="基于知识库提问，答案将附引用溯源…"
           aria-label="提问"
+          aria-describedby={selectionBlocked ? "question-doc-selection-hint" : undefined}
           className="min-w-0 flex-1 bg-transparent outline-none"
           style={{
             fontSize: "var(--text-body-size-zh, 15px)",
@@ -53,7 +58,7 @@ export function QuestionBox({ onAsk, disabled, examples }: QuestionBoxProps) {
         <button
           type="button"
           onClick={submit}
-          disabled={disabled || !value.trim()}
+          disabled={cannotSubmit}
           className="rounded-sm transition-colors"
           style={{
             height: 32,
@@ -63,16 +68,26 @@ export function QuestionBox({ onAsk, disabled, examples }: QuestionBoxProps) {
             color: value.trim() ? "var(--nb-text)" : "var(--nb-text-tertiary)",
             fontSize: "var(--text-body-size)",
             fontWeight: 500,
-            cursor: disabled || !value.trim() ? "not-allowed" : "pointer",
+            cursor: cannotSubmit ? "not-allowed" : "pointer",
           }}
           onMouseEnter={(e) => {
-            if (!disabled && value.trim()) e.currentTarget.style.backgroundColor = "var(--nb-bg-hover)";
+            if (!cannotSubmit) e.currentTarget.style.backgroundColor = "var(--nb-bg-hover)";
           }}
           onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = "var(--nb-bg)")}
         >
           提问
         </button>
       </div>
+
+      {selectionBlocked ? (
+        <p
+          id="question-doc-selection-hint"
+          role="note"
+          style={{ margin: 0, fontSize: "var(--text-meta-size)", color: "var(--nb-text-tertiary)" }}
+        >
+          请至少勾选 1 份知识库文档
+        </p>
+      ) : null}
 
       {examples.length > 0 ? (
         <div className="flex flex-wrap items-center" style={{ gap: "var(--space-8)" }}>

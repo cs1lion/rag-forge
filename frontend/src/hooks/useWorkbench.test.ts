@@ -57,9 +57,9 @@ describe("useWorkbench 文档上传与删除", () => {
   beforeEach(() => {
     vi.stubGlobal(
       "fetch",
-      vi.fn(async (input: RequestInfo | URL) => {
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input);
-        if (url === "/api/documents" && (input as RequestInit)?.method === "POST")
+        if (url === "/api/documents" && init?.method === "POST")
           return Response.json({
             document: {
               doc_id: "doc09",
@@ -69,11 +69,29 @@ describe("useWorkbench 文档上传与删除", () => {
               parse_method: "MD 直读",
               char_count: 10,
               injection_flag: 0,
+              risk_warning: null,
               chunk_count: 1,
               created_at: "2026-11-18T10:00:00Z",
             },
           });
-        if (url === "/api/documents") return Response.json({ documents: [], total: 0 });
+        if (url === "/api/documents")
+          return Response.json({
+            documents: [
+              {
+                doc_id: "doc09",
+                title: "新文档",
+                source_file: "new.md",
+                source_format: "md",
+                parse_method: "MD 直读",
+                char_count: 10,
+                injection_flag: 0,
+                risk_warning: null,
+                chunk_count: 1,
+                created_at: "2026-11-18T10:00:00Z",
+              },
+            ],
+            total: 1,
+          });
         if (url === "/api/qa") return Response.json({ records: [], total: 0 });
         if (url === "/api/video-tasks") return Response.json({ tasks: [], running_count: 0 });
         return new Response(null, { status: 404 });
@@ -83,11 +101,48 @@ describe("useWorkbench 文档上传与删除", () => {
 
   afterEach(() => vi.unstubAllGlobals());
 
-  it("upload 成功后刷新文档列表", async () => {
+  it("upload 成功后刷新文档列表并默认勾选新文档", async () => {
     const { result } = renderHook(() => useWorkbench());
-    await waitFor(() => expect(result.current.documents).toEqual([]));
-    await act(() => result.current.upload(new File(["# x"], "new.md", { type: "text/markdown" })));
+    await waitFor(() => expect(result.current.selectedDocIds).toEqual(["doc09"]));
+    expect(result.current.documents).toHaveLength(1);
     expect(result.current.error).toBeNull();
+  });
+
+  it("已有文档取消勾选时，上传新文档仍会默认勾选", async () => {
+    const initial = {
+      doc_id: "doc01",
+      title: "旧文档",
+      source_file: "old.md",
+      source_format: "md",
+      parse_method: "MD 直读",
+      char_count: 10,
+      injection_flag: 0,
+      risk_warning: null,
+      chunk_count: 1,
+      created_at: "2026-11-18T10:00:00Z",
+    };
+    let uploaded = false;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url === "/api/documents" && init?.method === "POST") {
+          uploaded = true;
+          return Response.json({ document: { ...initial, doc_id: "doc09", title: "新文档", source_file: "new.md" } });
+        }
+        if (url === "/api/documents")
+          return Response.json({ documents: uploaded ? [initial, { ...initial, doc_id: "doc09", title: "新文档", source_file: "new.md" }] : [initial], total: uploaded ? 2 : 1 });
+        if (url === "/api/qa") return Response.json({ records: [], total: 0 });
+        if (url === "/api/video-tasks") return Response.json({ tasks: [], running_count: 0 });
+        return new Response(null, { status: 404 });
+      }),
+    );
+    const { result } = renderHook(() => useWorkbench());
+    await waitFor(() => expect(result.current.selectedDocIds).toEqual(["doc01"]));
+    act(() => result.current.toggleAllDocs());
+    expect(result.current.selectedDocIds).toEqual([]);
+    await act(() => result.current.upload(new File(["# x"], "new.md", { type: "text/markdown" })));
+    expect(result.current.selectedDocIds).toEqual(["doc09"]);
   });
 
   it("upload 失败写入错误且不抛出", async () => {
@@ -150,7 +205,7 @@ describe("useWorkbench 历史切换与 SSE 实时更新", () => {
         if (url === "/api/qa") return Response.json({ records: [QA_SUMMARY], total: 1 });
         if (url === "/api/qa/1") return Response.json({ record: QA_DETAIL });
         if (url === "/api/video-tasks") return Response.json({ tasks: [], running_count: 0 });
-        if (url === "/api/ask") return sseStream(EVENTS);
+        if (url === "/api/qa/ask") return sseStream(EVENTS);
         return new Response(null, { status: 404 });
       }),
     );
@@ -208,7 +263,7 @@ describe("useWorkbench 历史切换与 SSE 实时更新", () => {
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
         const url = String(input);
-        if (url === "/api/ask") {
+        if (url === "/api/qa/ask") {
           askCount += 1;
           return sseStream([EVENTS[0]]);
         }
@@ -243,7 +298,7 @@ describe("useWorkbench 历史切换与 SSE 实时更新", () => {
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
         const url = String(input);
-        if (url === "/api/ask")
+        if (url === "/api/qa/ask")
           return new Response('event: error\ndata: {"code":"E_LLM_FAILED","message":"模型调用失败"}\n\n', { headers: { "Content-Type": "text/event-stream" } });
         if (url === "/api/documents") return Response.json({ documents: [], total: 0 });
         if (url === "/api/qa") return Response.json({ records: [QA_SUMMARY], total: 1 });
@@ -263,7 +318,7 @@ describe("useWorkbench 历史切换与 SSE 实时更新", () => {
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
         const url = String(input);
-        if (url === "/api/ask")
+        if (url === "/api/qa/ask")
           return new Response(
             'event: qa.done\ndata: {"qa_record_id":1,"video_task_id":9}\n\n' +
               'event: video.failed\ndata: {"task_id":9,"error":"TTS 服务超时"}\n\n',
@@ -319,7 +374,7 @@ describe("useWorkbench 历史切换与 SSE 实时更新", () => {
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
         const url = String(input);
-        if (url === "/api/ask")
+        if (url === "/api/qa/ask")
           return new Response(
             'event: qa.done\ndata: {"qa_record_id":1,"video_task_id":3}\n\n' +
               'event: video.done\ndata: {"task_id":3,"video_url":"/api/videos/3/file"}\n\n',
@@ -344,11 +399,166 @@ describe("useWorkbench 历史切换与 SSE 实时更新", () => {
     expect(t3.video_url).toBe("/api/videos/3/file");
   });
 
+  it("服务端已完成的任务会推进本地占位任务（历史回看可播放的前提）", async () => {
+    // 问答流只到 video.queued；渲染完成后服务端列表返回 done + video_url，
+    // 本地占位任务必须被推进为 done（否则历史回看永远无视频）。
+    const doneTask: VideoTask = {
+      id: 3,
+      qa_record_id: 1,
+      status: "done",
+      progress: 1,
+      stage: "mux",
+      video_url: "/api/videos/3/file",
+      error: null,
+      created_at: "2026-11-18T10:00:00Z",
+      started_at: "2026-11-18T10:00:01Z",
+      finished_at: "2026-11-18T10:00:30Z",
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === "/api/qa/ask")
+          return new Response(
+            'event: qa.done\ndata: {"qa_record_id":1,"video_task_id":3}\n\n' +
+              'event: video.queued\ndata: {"task_id":3,"queue_position":1}\n\n',
+            { headers: { "Content-Type": "text/event-stream" } },
+          );
+        if (url === "/api/documents") return Response.json({ documents: [], total: 0 });
+        if (url === "/api/qa") return Response.json({ records: [QA_SUMMARY], total: 1 });
+        if (url === "/api/video-tasks") return Response.json({ tasks: [doneTask], running_count: 0 });
+        return new Response(null, { status: 404 });
+      }),
+    );
+    const { result } = renderHook(() => useWorkbench());
+    await waitFor(() => expect(result.current.qaRecords).toHaveLength(1));
+    act(() => result.current.ask("q"));
+    await waitFor(() => {
+      const t = result.current.videoTasks.find((x) => x.id === 3);
+      expect(t?.status).toBe("done");
+      expect(t?.video_url).toBe("/api/videos/3/file");
+    });
+  });
+
   it("挂载时列表接口失败写入错误横幅，clearError 可清空", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(null, { status: 500, statusText: "boom" })));
     const { result } = renderHook(() => useWorkbench());
     await waitFor(() => expect(result.current.error).toBeTruthy());
     act(() => result.current.clearError());
     expect(result.current.error).toBeNull();
+  });
+
+  it("文档全部取消勾选时 ask 不发请求并给出固定提示", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === "/api/documents") return Response.json({ documents: [{ doc_id: "doc01" }], total: 1 });
+        if (url === "/api/qa") return Response.json({ records: [QA_SUMMARY], total: 1 });
+        if (url === "/api/video-tasks") return Response.json({ tasks: [], running_count: 0 });
+        return new Response(null, { status: 404 });
+      }),
+    );
+    const { result } = renderHook(() => useWorkbench());
+    await waitFor(() => expect(result.current.selectedDocIds).toEqual(["doc01"]));
+    act(() => result.current.toggleAllDocs());
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockClear();
+    act(() => result.current.ask("不应发送"));
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(result.current.askWarning).toBe("请至少勾选 1 份知识库文档");
+    expect(result.current.isAsking).toBe(false);
+    act(() => result.current.toggleDocSelection("doc01"));
+    expect(result.current.askWarning).toBeNull();
+  });
+
+  it("video.skipped 事件更新为正常终态且不记录失败原因", async () => {
+    const { result } = renderHook(() => useWorkbench());
+    await waitFor(() => expect(result.current.qaRecords).toHaveLength(1));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === "/api/qa/ask")
+          return sseStream([
+            { name: "qa.done", data: { qa_record_id: 1, video_task_id: 3 } },
+            { name: "video.skipped", data: { task_id: 3, reason: "知识库未命中" } },
+          ]);
+        if (url === "/api/documents") return Response.json({ documents: [], total: 0 });
+        if (url === "/api/qa") return Response.json({ records: [QA_SUMMARY], total: 1 });
+        if (url === "/api/video-tasks") return Response.json({ tasks: [], running_count: 0 });
+        return new Response(null, { status: 404 });
+      }),
+    );
+    act(() => result.current.ask("q"));
+    await waitFor(() => expect(result.current.videoTasks[0]?.status).toBe("skipped"));
+    expect(result.current.videoTasks[0]?.error).toBeNull();
+    expect(result.current.activeVideoTaskId).toBe(3);
+  });
+
+  it("selectHistory 成功后关闭历史弹层（historyOpen 复位）", async () => {
+    const { result } = renderHook(() => useWorkbench());
+    await waitFor(() => expect(result.current.qaRecords).toHaveLength(1));
+    act(() => result.current.setHistoryOpen(true));
+    expect(result.current.historyOpen).toBe(true);
+    await act(() => result.current.selectHistory(1));
+    expect(result.current.historyOpen).toBe(false);
+  });
+});
+
+describe("useWorkbench 删除", () => {
+  beforeEach(() => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+        if (method === "DELETE" && url === "/api/qa/1") return new Response(null, { status: 204 });
+        if (url === "/api/qa/1") return Response.json({ record: QA_DETAIL });
+        if (method === "DELETE" && url === "/api/video-tasks/3") return new Response(null, { status: 204 });
+        if (url === "/api/documents") return Response.json({ documents: [], total: 0 });
+        if (url === "/api/qa") return Response.json({ records: [QA_SUMMARY], total: 1 });
+        if (url === "/api/video-tasks") return Response.json({ tasks: [], running_count: 0 });
+        return new Response(null, { status: 404 });
+      }),
+    );
+  });
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("removeHistory 删除后从列表移除并清空当前选中态", async () => {
+    const { result } = renderHook(() => useWorkbench());
+    await waitFor(() => expect(result.current.qaRecords).toHaveLength(1));
+    await act(async () => { await result.current.selectHistory(1); });
+    expect(result.current.selectedHistoryId).toBe(1);
+
+    await act(async () => { await result.current.removeHistory(1); });
+    expect(result.current.qaRecords).toHaveLength(0);
+    expect(result.current.selectedHistoryId).toBeNull();
+    expect(result.current.currentQuestion).toBe("");
+    expect(result.current.error).toBeNull();
+  });
+
+  it("removeVideoTask 删除后从队列移除，若为当前任务则复位 activeVideoTaskId", async () => {
+    const { result } = renderHook(() => useWorkbench());
+    await waitFor(() => expect(result.current.qaRecords).toHaveLength(1));
+    await act(async () => { await result.current.selectHistory(1); });
+    expect(result.current.activeVideoTaskId).toBe(3);
+
+    await act(async () => { await result.current.removeVideoTask(3); });
+    expect(result.current.videoTasks).toHaveLength(0);
+    expect(result.current.activeVideoTaskId).toBeNull();
+    expect(result.current.error).toBeNull();
+  });
+
+  it("删除原文档后历史回看仍渲染保存的引用快照", async () => {
+    const { result } = renderHook(() => useWorkbench());
+    await waitFor(() => expect(result.current.qaRecords).toHaveLength(1));
+    await act(async () => { await result.current.removeDocument("doc05"); });
+    await act(async () => { await result.current.selectHistory(1); });
+    expect(result.current.error).toBeNull();
+    expect(result.current.citations[0]?.source_file).toBe("西海市众赢科技有限公司介绍.docx");
+    expect(result.current.citations[0]?.heading_path).toContain("五、研发体系与投入");
+    expect(result.current.citations[0]?.snippet).toContain("研发投入 11 亿元");
   });
 });

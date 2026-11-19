@@ -23,7 +23,9 @@ export type IconName =
   | "close"
   | "clock"
   | "film"
-  | "layers";
+  | "layers"
+  | "shield"
+  | "download";
 
 interface IconProps extends SVGProps<SVGSVGElement> {
   name: IconName;
@@ -124,6 +126,19 @@ const PATHS: Record<IconName, ReactNode> = {
     <>
       <path d="M12 3.5l9 4.5-9 4.5-9-4.5 9-4.5z" />
       <path d="M3 12.5l9 4.5 9-4.5" />
+    </>
+  ),
+  shield: (
+    <>
+      <path d="M12 3.5l7.5 3v6c0 4.5-3.2 7.7-7.5 9-4.3-1.3-7.5-4.5-7.5-9v-6l7.5-3z" />
+      <path d="M9.5 12l2 2 3.5-4" />
+    </>
+  ),
+  download: (
+    <>
+      <path d="M12 4v11" />
+      <path d="M7 10.5L12 15.5l5-5" />
+      <path d="M4.5 19.5h15" />
     </>
   ),
 };

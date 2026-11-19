@@ -1,10 +1,11 @@
 /**
- * 左侧栏单元测试（Step 2）：文档库 + 历史问答组合与上传禁用态。
+ * 左侧栏单元测试：文档库面板（勾选生效范围）与上传禁用态。
+ * 历史问答列表已迁至顶栏「历史」按钮弹层（会话 4），侧栏不再承载。
  */
 import { describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { Sidebar } from "./Sidebar";
-import type { DocumentRecord, QaRecordSummary } from "../types";
+import type { DocumentRecord } from "../types";
 
 const doc: DocumentRecord = {
   doc_id: "doc01",
@@ -18,48 +19,26 @@ const doc: DocumentRecord = {
   created_at: "2026-11-18T10:00:00Z",
 };
 
-const rec: QaRecordSummary = {
-  id: 1,
-  question: "q?",
-  answer_summary: "a",
-  video_task_id: 3,
-  video_status: "done",
-  created_at: "2026-11-18T10:00:00Z",
+const baseProps = {
+  onUpload: vi.fn(),
+  onDeleteDoc: vi.fn(),
+  onToggleDoc: vi.fn(),
+  onToggleAllDocs: vi.fn(),
 };
 
 describe("Sidebar 左侧栏", () => {
-  it("渲染文档库与历史问答两个面板及计数", () => {
+  it("渲染文档库面板与计数，默认显示全选状态", () => {
     render(
-      <Sidebar
-        documents={[doc]}
-        qaRecords={[rec]}
-        selectedHistoryId={null}
-        onUpload={vi.fn()}
-        onDeleteDoc={vi.fn()}
-        onSelectHistory={vi.fn()}
-        uploading={false}
-      />,
+      <Sidebar documents={[doc]} selectedDocIds={["doc01"]} {...baseProps} uploading={false} />,
     );
     expect(screen.getByText("文档库")).toBeInTheDocument();
     expect(screen.getByText("1 篇")).toBeInTheDocument();
-    expect(screen.getByText("历史问答")).toBeInTheDocument();
-    expect(screen.getByText("1 条")).toBeInTheDocument();
     expect(screen.getByText("众赢科技介绍")).toBeInTheDocument();
-    expect(screen.getByText("q?")).toBeInTheDocument();
+    expect(screen.getByLabelText("全选文档")).toBeChecked();
   });
 
   it("uploading 时上传区禁用", () => {
-    render(
-      <Sidebar
-        documents={[]}
-        qaRecords={[]}
-        selectedHistoryId={null}
-        onUpload={vi.fn()}
-        onDeleteDoc={vi.fn()}
-        onSelectHistory={vi.fn()}
-        uploading
-      />,
-    );
+    render(<Sidebar documents={[]} selectedDocIds={[]} {...baseProps} uploading />);
     expect(screen.getByText("拖拽文档到此处，或点击选择文件").closest("button")).toBeDisabled();
   });
 });

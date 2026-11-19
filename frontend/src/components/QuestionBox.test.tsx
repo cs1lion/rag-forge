@@ -54,6 +54,19 @@ describe("QuestionBox 提问入口", () => {
     expect(screen.queryByText("示例问题")).not.toBeInTheDocument();
   });
 
+  it("全不选时禁用发送并在输入框下方提示，回车也不提交", async () => {
+    const user = userEvent.setup();
+    const onAsk = vi.fn();
+    render(<QuestionBox onAsk={onAsk} disabled={false} noDocSelected examples={[]} />);
+    const input = screen.getByLabelText("提问");
+    await user.type(input, "问题{enter}");
+    const hint = screen.getByRole("note");
+    expect(hint).toHaveTextContent("请至少勾选 1 份知识库文档");
+    expect(input).toHaveAttribute("aria-describedby", hint.id);
+    expect(screen.getByRole("button", { name: "提问" })).toBeDisabled();
+    expect(onAsk).not.toHaveBeenCalled();
+  });
+
   it("提问按钮与示例胶囊悬停填充 hover 色", async () => {
     const user = userEvent.setup();
     render(<QuestionBox onAsk={vi.fn()} disabled={false} examples={["示例"]} />);

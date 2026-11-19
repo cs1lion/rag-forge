@@ -2,7 +2,7 @@
  * REST 客户端单元测试（§2/§3/§4）：路径、method、错误模型与 204 处理。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { deleteDocument, getQaRecord, getVideoTask, listDocuments, listQaRecords, listVideoTasks, uploadDocument, videoFileUrl } from "./api";
+import { deleteDocument, deleteQaRecord, deleteVideoTask, getQaRecord, getVideoTask, listDocuments, listQaRecords, listVideoTasks, uploadDocument, videoFileUrl } from "./api";
 
 let fetchMock: ReturnType<typeof vi.fn>;
 
@@ -39,6 +39,18 @@ describe("REST 客户端", () => {
     fetchMock.mockResolvedValue(new Response(null, { status: 204 }));
     await expect(deleteDocument("doc/08?")).resolves.toBeUndefined();
     expect(fetchMock).toHaveBeenCalledWith("/api/documents/doc%2F08%3F", expect.objectContaining({ method: "DELETE" }));
+  });
+
+  it("deleteQaRecord 走 DELETE /qa/{id}", async () => {
+    fetchMock.mockResolvedValue(new Response(null, { status: 204 }));
+    await deleteQaRecord(7);
+    expect(fetchMock).toHaveBeenCalledWith("/api/qa/7", expect.objectContaining({ method: "DELETE" }));
+  });
+
+  it("deleteVideoTask 走 DELETE /video-tasks/{id}", async () => {
+    fetchMock.mockResolvedValue(new Response(null, { status: 204 }));
+    await deleteVideoTask(3);
+    expect(fetchMock).toHaveBeenCalledWith("/api/video-tasks/3", expect.objectContaining({ method: "DELETE" }));
   });
 
   it("getQaRecord / getVideoTask 走详情路径", async () => {

@@ -6,20 +6,24 @@
  */
 import { useState } from "react";
 import { Icon } from "./Icon";
-import type { Citation } from "../types";
+import type { Citation, RiskWarning } from "../types";
 import { formatDate } from "../lib/format";
 
 interface SourcesBarProps {
   citations: Citation[];
+  /** 涉及文档的风险提示汇总（qa.citations 事件下发，§6） */
+  riskWarnings?: RiskWarning[];
   createdAt?: string;
 }
 
-export function SourcesBar({ citations, createdAt }: SourcesBarProps) {
+export function SourcesBar({ citations, riskWarnings = [], createdAt }: SourcesBarProps) {
   const [selected, setSelected] = useState<number | null>(null);
 
-  if (citations.length === 0) return null;
+  if (citations.length === 0 && riskWarnings.length === 0) return null;
 
   const active = selected !== null ? citations[selected] : null;
+  // 入库时自动识别到越权指令文本的文档：在检索结果中提示风险
+  const riskyCitations = citations.filter((c) => c.injection_flag === 1);
 
   return (
     <section aria-label="引用来源" style={{ display: "flex", flexDirection: "column", gap: "var(--space-12)" }}>
@@ -33,6 +37,30 @@ export function SourcesBar({ citations, createdAt }: SourcesBarProps) {
         <span>点击卡片查看原文段落</span>
       </div>
 
+      {riskyCitations.length > 0 || riskWarnings.length > 0 ? (
+        <div
+          role="alert"
+          className="flex items-start"
+          style={{
+            gap: "var(--space-8)",
+            padding: "var(--space-12) var(--space-16)",
+            border: "var(--border-width) solid var(--nb-border)",
+            borderRadius: "var(--nb-radius-sm)",
+            backgroundColor: "var(--nb-tint-amber-bg)",
+            color: "var(--nb-tint-amber-ink)",
+          }}
+        >
+          <Icon name="alert" size={16} style={{ marginTop: 2, flexShrink: 0 }} />
+          <span style={{ fontSize: "var(--text-meta-size)", lineHeight: "var(--text-body-line-height)" }}>
+            {riskWarnings.length > 0
+              ? `风险提示：${riskWarnings.map((w) => `${w.source_file}（${w.risk_warning}）`).join("；")}`
+              : `以下 ${riskyCitations.length} 个来源来自含疑似越权指令文本的文档` +
+                "（入库时已自动识别并过滤相关段落，不参与检索），回答已按双重防注入机制处理，请留意引用内容：" +
+                riskyCitations.map((c) => c.source_file).join("、")}
+          </span>
+        </div>
+      ) : null}
+
       <div
         className="flex"
         style={{ gap: "var(--space-8)", overflowX: "auto", paddingBottom: "var(--space-4)" }}
@@ -41,6 +69,8 @@ export function SourcesBar({ citations, createdAt }: SourcesBarProps) {
       >
         {citations.map((cit, i) => {
           const isActive = selected === i;
+          const sourceFile = cit.source_file || cit.filename || "原始文件名已不可用";
+          const headingPath = cit.heading_path || "章节路径未记录";
           return (
             <button
               key={`${cit.para_id}-${i}`}
@@ -87,7 +117,7 @@ export function SourcesBar({ citations, createdAt }: SourcesBarProps) {
                     textOverflow: "ellipsis",
                   }}
                 >
-                  {cit.source_file}
+                  {sourceFile}
                 </span>
                 <span
                   style={{
@@ -101,7 +131,7 @@ export function SourcesBar({ citations, createdAt }: SourcesBarProps) {
                     textOverflow: "ellipsis",
                   }}
                 >
-                  {cit.heading_path}
+                  {headingPath}
                 </span>
               </span>
               <Icon
@@ -127,23 +157,23 @@ export function SourcesBar({ citations, createdAt }: SourcesBarProps) {
         >
           <div className="flex flex-wrap items-baseline" style={{ gap: "var(--space-12)" }}>
             <span style={{ fontSize: "var(--text-card-title-size-zh)", fontWeight: 500, color: "var(--nb-text)" }}>
-              {active.doc_title}
+              {active.doc_title || active.filename || active.source_file || "原文档已删除"}
             </span>
             <span style={{ fontSize: "var(--text-meta-size)", color: "var(--nb-text-tertiary)" }}>
-              原文文件：{active.source_file}
+              原文文件：{active.source_file || active.filename || "原始文件名已不可用"}
             </span>
             <span style={{ fontSize: "var(--text-meta-size)", color: "var(--nb-text-tertiary)" }}>
-              语料编号：{active.doc_id}
+              语料编号：{active.doc_id || "未记录"}
             </span>
             <span style={{ fontSize: "var(--text-meta-size)", color: "var(--nb-text-tertiary)" }}>
-              相似度 {(active.score * 100).toFixed(0)}%
+              相似度 {((active.score ?? 0) * 100).toFixed(0)}%
             </span>
           </div>
           <div style={{ fontSize: "var(--text-meta-size)", color: "var(--nb-text-tertiary)" }}>
-            章节路径：{active.heading_path}
+            章节路径：{active.heading_path || "章节路径未记录"}
           </div>
           <div style={{ fontSize: "var(--text-meta-size)", color: "var(--nb-text-tertiary)" }}>
-            段落定位：{active.para_id}
+            段落定位：{active.para_id || "段落编号未记录"}
           </div>
           <blockquote
             style={{

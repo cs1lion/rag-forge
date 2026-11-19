@@ -8,9 +8,10 @@ interface TopBarProps {
   onCreate: () => void;
   onToggleSidebar: () => void;
   sidebarOpen: boolean;
+  onOpenHistory: () => void;
 }
 
-export function TopBar({ onCreate, onToggleSidebar, sidebarOpen }: TopBarProps) {
+export function TopBar({ onCreate, onToggleSidebar, sidebarOpen, onOpenHistory }: TopBarProps) {
   return (
     <header
       className="flex items-center justify-between"
@@ -50,6 +51,7 @@ export function TopBar({ onCreate, onToggleSidebar, sidebarOpen }: TopBarProps) 
         <button
           type="button"
           aria-label="历史问答"
+          onClick={onOpenHistory}
           className="flex items-center justify-center rounded-full transition-colors"
           style={{ width: 32, height: 32 }}
           onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = "var(--nb-bg-hover)")}

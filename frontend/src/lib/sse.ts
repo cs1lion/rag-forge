@@ -26,10 +26,13 @@ export function askStream(
       "video.progress": (p: SsePayloadMap["video.progress"]) => void;
       "video.done": (p: SsePayloadMap["video.done"]) => void;
       "video.failed": (p: SsePayloadMap["video.failed"]) => void;
+      "video.skipped": (p: SsePayloadMap["video.skipped"]) => void;
     };
     onError?: (payload: SsePayloadMap["error"]) => void;
     onClose?: () => void;
   },
+  /** 本次问答生效的文档范围（文档库勾选）；缺省 = 全部文档 */
+  docIds?: string[],
 ): SseSession {
   const controller = new AbortController();
   let activeReader: ReadableStreamDefaultReader<Uint8Array> | null = null;
@@ -37,10 +40,16 @@ export function askStream(
   (async () => {
     let res: Response;
     try {
-      res = await fetch("/api/ask", {
+      // API_SPEC §3 别名锁定：/api/qa/ask
+      res = await fetch("/api/qa/ask", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question, history_limit: historyLimit }),
+        body: JSON.stringify({
+          question,
+          history_limit: historyLimit,
+          // API_SPEC §3：selected_doc_ids 为契约字段；显式空列表 = 空范围拒答
+          ...(docIds ? { selected_doc_ids: docIds } : {}),
+        }),
         signal: controller.signal,
       });
     } catch (err) {
@@ -103,6 +112,7 @@ function dispatchBlock(
       "video.progress": (p: SsePayloadMap["video.progress"]) => void;
       "video.done": (p: SsePayloadMap["video.done"]) => void;
       "video.failed": (p: SsePayloadMap["video.failed"]) => void;
+      "video.skipped": (p: SsePayloadMap["video.skipped"]) => void;
     };
     onError?: (payload: SsePayloadMap["error"]) => void;
   },

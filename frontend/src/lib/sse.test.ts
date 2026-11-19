@@ -64,6 +64,7 @@ describe("askStream SSE 解析", () => {
         "video.progress": () => calls.push("video.progress"),
         "video.done": () => calls.push("video.done"),
         "video.failed": () => calls.push("video.failed"),
+        "video.skipped": () => calls.push("video.skipped"),
       },
       onClose: () => calls.push("close"),
     });
@@ -102,6 +103,7 @@ describe("askStream SSE 解析", () => {
           expect(p.video_url).toBe("/api/videos/3/file");
         },
         "video.failed": () => {},
+        "video.skipped": () => {},
       },
     });
 
@@ -124,6 +126,7 @@ describe("askStream SSE 解析", () => {
         "video.progress": () => events.push("x"),
         "video.done": () => events.push("x"),
         "video.failed": () => events.push("x"),
+        "video.skipped": () => events.push("x"),
       },
       onError: (p) => errors.push(`${p.code}:${p.message}`),
     });
@@ -148,6 +151,7 @@ describe("askStream SSE 解析", () => {
         "video.progress": () => {},
         "video.done": () => {},
         "video.failed": () => {},
+        "video.skipped": () => {},
       },
     });
 
@@ -170,6 +174,7 @@ describe("askStream SSE 解析", () => {
         "video.progress": () => {},
         "video.done": () => {},
         "video.failed": () => {},
+        "video.skipped": () => {},
       },
       onError: (p) => errors.push(p.code),
       onClose: closed,
@@ -177,6 +182,56 @@ describe("askStream SSE 解析", () => {
 
     await vi.waitFor(() => expect(closed).toHaveBeenCalledOnce());
     expect(errors[0]).toMatch(/^E_HTTP_500/);
+  });
+
+  it("勾选文档范围以 selected_doc_ids 字段发送至 /api/qa/ask；未勾选时发送空范围", async () => {
+    fetchMock.mockResolvedValue(new Response("", { headers: OK }));
+    const handlers = {
+      onEvent: {
+        "qa.progress": () => {},
+        "qa.citations": () => {},
+        "qa.answer": () => {},
+        "qa.done": () => {},
+        "video.queued": () => {},
+        "video.progress": () => {},
+        "video.done": () => {},
+        "video.failed": () => {},
+        "video.skipped": () => {},
+      },
+    };
+    askStream("q", 10, handlers, ["doc01", "doc02"]);
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/qa/ask");
+    const body = JSON.parse(String(fetchMock.mock.calls[0][1].body));
+    expect(body).toEqual({ question: "q", history_limit: 10, selected_doc_ids: ["doc01", "doc02"] });
+
+    fetchMock.mockClear();
+    fetchMock.mockResolvedValue(new Response("", { headers: OK }));
+    askStream("q", 10, handlers, []);
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    const body2 = JSON.parse(String(fetchMock.mock.calls[0][1].body));
+    expect(body2.selected_doc_ids).toEqual([]);
+  });
+
+  it("分发 video.skipped 事件", async () => {
+    const onSkipped = vi.fn();
+    fetchMock.mockResolvedValue(
+      new Response(block("video.skipped", { task_id: 3, reason: "知识库未命中" }), { headers: OK }),
+    );
+    askStream("q", 10, {
+      onEvent: {
+        "qa.progress": () => {},
+        "qa.citations": () => {},
+        "qa.answer": () => {},
+        "qa.done": () => {},
+        "video.queued": () => {},
+        "video.progress": () => {},
+        "video.done": () => {},
+        "video.failed": () => {},
+        "video.skipped": onSkipped,
+      },
+    });
+    await vi.waitFor(() => expect(onSkipped).toHaveBeenCalledWith({ task_id: 3, reason: "知识库未命中" }));
   });
 
   it("未知事件名安全忽略，不抛异常", async () => {
@@ -192,7 +247,8 @@ describe("askStream SSE 解析", () => {
         "video.queued": () => calls.push("x"),
         "video.progress": () => calls.push("x"),
         "video.done": () => calls.push("x"),
-        "video.failed": () => calls.push("x"),
+        "video.failed": () => {},
+        "video.skipped": () => {},
       },
     });
 
@@ -212,7 +268,8 @@ describe("askStream SSE 解析", () => {
         "video.queued": () => calls.push("x"),
         "video.progress": () => calls.push("x"),
         "video.done": () => calls.push("x"),
-        "video.failed": () => calls.push("x"),
+        "video.failed": () => {},
+        "video.skipped": () => {},
       },
     });
 
@@ -234,6 +291,7 @@ describe("askStream SSE 解析", () => {
         "video.progress": () => {},
         "video.done": () => {},
         "video.failed": () => {},
+        "video.skipped": () => {},
       },
       onError: (p) => errors.push(p.code),
       onClose: closed,
@@ -262,6 +320,7 @@ describe("askStream SSE 解析", () => {
         "video.progress": () => {},
         "video.done": () => {},
         "video.failed": () => {},
+        "video.skipped": () => {},
       },
       onError: (p) => errors.push(`${p.code}:${p.message}`),
       onClose: closed,
@@ -292,6 +351,7 @@ describe("askStream SSE 解析", () => {
         "video.progress": () => calls.push("vp"),
         "video.done": () => calls.push("vd"),
         "video.failed": () => calls.push("vf"),
+        "video.skipped": () => calls.push("vs"),
       },
       onClose: closed,
     });

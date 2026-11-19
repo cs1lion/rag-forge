@@ -58,6 +58,10 @@ export async function getQaRecord(id: number): Promise<{ record: QaRecordDetail 
   return request(`/qa/${id}`);
 }
 
+export async function deleteQaRecord(id: number): Promise<void> {
+  return request(`/qa/${id}`, { method: "DELETE" });
+}
+
 /* ---------- 视频任务（§4） ---------- */
 
 export async function listVideoTasks(): Promise<{ tasks: VideoTask[]; running_count: number }> {
@@ -66,6 +70,10 @@ export async function listVideoTasks(): Promise<{ tasks: VideoTask[]; running_co
 
 export async function getVideoTask(id: number): Promise<{ task: VideoTask }> {
   return request(`/video-tasks/${id}`);
+}
+
+export async function deleteVideoTask(id: number): Promise<void> {
+  return request(`/video-tasks/${id}`, { method: "DELETE" });
 }
 
 export function videoFileUrl(taskId: number): string {

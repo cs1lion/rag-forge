@@ -24,7 +24,7 @@ describe("App 三栏工作台", () => {
         if (url === "/api/documents") return Response.json({ documents: [], total: 0 });
         if (url === "/api/qa") return Response.json({ records: [QA_SUMMARY], total: 1 });
         if (url === "/api/video-tasks") return Response.json({ tasks: [], running_count: 0 });
-        if (url === "/api/ask")
+        if (url === "/api/qa/ask")
           return new Response(
             'event: qa.progress\ndata: {"stage":"retrieval","message":"正在检索知识库…","progress":0.1}\n\n' +
               'event: qa.citations\ndata: {"citations":[]}\n\n' +
@@ -45,7 +45,14 @@ describe("App 三栏工作台", () => {
     expect(screen.getByText("文档库")).toBeInTheDocument();
     expect(screen.getByText("视频工作室")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /创建/ })).toBeInTheDocument();
-    await waitFor(() => expect(screen.getByText(QA_SUMMARY.question)).toBeInTheDocument());
+    // 历史问答已迁至顶栏抽屉：默认不渲染历史列表
+    expect(screen.queryByText("共 1 条记录")).not.toBeInTheDocument();
+    // 顶栏历史按钮可点击打开抽屉
+    await userEvent.click(screen.getByLabelText("历史问答"));
+    await waitFor(() => expect(screen.getByText("共 1 条记录")).toBeInTheDocument());
+    // 抽屉内渲染历史问题文本（与示例问题重名，限定在 dialog 内查询）
+    const dialog = screen.getByRole("dialog");
+    await waitFor(() => expect(dialog.textContent).toContain(QA_SUMMARY.question));
   });
 
   it("输入问题并提交后展示问题与流式回答", async () => {
@@ -151,5 +158,26 @@ describe("App 三栏工作台", () => {
     const input = document.querySelector('input[type="file"]') as HTMLInputElement;
     await user.upload(input, new File(["# 新"], "new.md", { type: "text/markdown" }));
     await waitFor(() => expect(screen.getByText("新入库文档")).toBeInTheDocument());
+    expect(screen.getByLabelText("选择文档 新入库文档")).toBeChecked();
+  });
+
+  it("取消所有文档后发送按钮禁用并展示提示", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === "/api/documents")
+          return Response.json({ documents: [{ doc_id: "doc01", title: "唯一文档", source_file: "one.md", source_format: "md", parse_method: "MD 直读", char_count: 10, injection_flag: 0, risk_warning: null, chunk_count: 1, created_at: "2026-11-18T10:00:00Z" }], total: 1 });
+        if (url === "/api/qa") return Response.json({ records: [], total: 0 });
+        if (url === "/api/video-tasks") return Response.json({ tasks: [], running_count: 0 });
+        return new Response(null, { status: 404 });
+      }),
+    );
+    render(<App />);
+    await waitFor(() => expect(screen.getByLabelText("选择文档 唯一文档")).toBeChecked());
+    await userEvent.click(screen.getByLabelText("全选文档"));
+    expect(screen.getByLabelText("选择文档 唯一文档")).not.toBeChecked();
+    expect(screen.getByRole("button", { name: "提问" })).toBeDisabled();
+    expect(screen.getByText("请至少勾选 1 份知识库文档")).toBeInTheDocument();
   });
 });
