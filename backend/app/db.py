@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS documents (
     parse_method TEXT NOT NULL,
     char_count INTEGER NOT NULL DEFAULT 0,
     injection_flag INTEGER NOT NULL DEFAULT 0,
+    risk_warning TEXT,
     created_at TEXT NOT NULL
 );
 
@@ -62,6 +63,7 @@ CREATE TABLE IF NOT EXISTS video_tasks (
     status TEXT NOT NULL DEFAULT 'queued',
     progress REAL NOT NULL DEFAULT 0.0,
     stage TEXT NOT NULL DEFAULT '',
+    stage_text TEXT,
     video_path TEXT,
     error TEXT,
     queue_position INTEGER,
@@ -79,7 +81,28 @@ def get_conn(db_path: str | Path | None = None) -> sqlite3.Connection:
     return conn
 
 
+# 旧库可能残留 documents.quarantined 列（会话 4 的隔离开关已取消），
+# 保留但不再读写；新库不再创建该列。
+MIGRATIONS: list[tuple[str, str]] = [
+    # 入库解析阶段自动过滤注入片段后的风险提示（正常文档为 NULL）
+    ("documents.risk_warning", "ALTER TABLE documents ADD COLUMN risk_warning TEXT"),
+    # 拒答跳过视频生成时的说明文案（skipped 任务）
+    ("video_tasks.stage_text", "ALTER TABLE video_tasks ADD COLUMN stage_text TEXT"),
+]
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """幂等迁移：为既有库补齐新列（列已存在则跳过）。"""
+    for name, ddl in MIGRATIONS:
+        table, col = name.split(".", 1)
+        cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+        if col not in cols:
+            conn.execute(ddl)
+
+
 def init_db(db_path: str | Path | None = None) -> None:
     STORAGE.mkdir(parents=True, exist_ok=True)
     with get_conn(db_path) as conn:
         conn.executescript(SCHEMA)
+        _migrate(conn)
+        conn.commit()

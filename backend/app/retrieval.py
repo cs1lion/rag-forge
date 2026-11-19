@@ -83,19 +83,29 @@ def _bm25_score(tf: dict, dl: int, avg_dl: float, k1: float = 1.5, b: float = 0.
     return s
 
 
-def rare_term_queries(question: str, *, max_extra: int = 4) -> list[str]:
+def rare_term_queries(
+    question: str, *, max_extra: int = 4, doc_ids: list[str] | None = None
+) -> list[str]:
     """从问题中抽出稀有实体词（语料 df 最低的几个词项）单独成查询。
 
     通用查询精化（term-importance query refinement）：人名/职位/机构简称等
     稀有词在长句中会被常用 bigram 的得分淹没；把它们拎出来做精确查找，
     保证证据段落（如领导层表里的 CTO、聘任讲话里的"原 CTO"）能进候选池。
     排除纯数字/纯疑问词/单字噪声；无稀有词时返回空列表。
+    doc_ids 非空时，df 统计只针对勾选生效的文档范围。
     """
     toks = tokenize(question)
     if not toks:
         return []
     with get_conn() as conn:
-        rows = conn.execute("SELECT bm25_vec FROM chunks").fetchall()
+        if doc_ids:
+            placeholders = ",".join("?" * len(doc_ids))
+            rows = conn.execute(
+                f"SELECT bm25_vec FROM chunks WHERE doc_id IN ({placeholders})",
+                doc_ids,
+            ).fetchall()
+        else:
+            rows = conn.execute("SELECT bm25_vec FROM chunks").fetchall()
         if not rows:
             return []
         n_chunks = len(rows)
@@ -139,7 +149,9 @@ def rare_term_queries(question: str, *, max_extra: int = 4) -> list[str]:
     return picked
 
 
-def _rank_one(question: str, *, top_n: int) -> list[dict]:
+def _rank_one(
+    question: str, *, top_n: int, doc_ids: list[str] | None = None
+) -> list[dict]:
     """单查询打分：BM25+TF-IDF 混合，返回按分数降序的候选列表。
 
     BM25 采用标准分解：入库端存文档侧饱和 tf 权重（idf 置 1，见
@@ -159,11 +171,20 @@ def _rank_one(question: str, *, top_n: int) -> list[dict]:
 
     with get_conn() as conn:
         # JOIN documents 补齐溯源四件套中的 doc_title / source_file（引用卡片展示用）
-        rows = conn.execute(
+        # 与 injection_flag（入库自动识别的越权指令风险，供前端提示）。
+        # doc_ids 非空时仅检索本次勾选生效的文档（用户勾选范围）。
+        sql = (
             "SELECT c.doc_id, c.para_id, c.heading_path, c.block_type, c.text, c.chars,"
-            " c.bm25_vec, c.tfidf_vec, d.title AS doc_title, d.source_file"
+            " c.bm25_vec, c.tfidf_vec, d.title AS doc_title, d.source_file,"
+            " d.injection_flag, d.risk_warning"
             " FROM chunks c JOIN documents d ON d.doc_id = c.doc_id"
-        ).fetchall()
+        )
+        params: list = []
+        if doc_ids:
+            placeholders = ",".join("?" * len(doc_ids))
+            sql += f" WHERE c.doc_id IN ({placeholders})"
+            params = list(doc_ids)
+        rows = conn.execute(sql, params).fetchall()
         if not rows:
             return []
         # 语料级 df 统计 → idf（Lucene 非负形式；N = chunk 总数）
@@ -200,6 +221,8 @@ def _rank_one(question: str, *, top_n: int) -> list[dict]:
                         "block_type": r["block_type"],
                         "text": r["text"],
                         "chars": r["chars"],
+                        "injection_flag": r["injection_flag"],
+                        "risk_warning": r["risk_warning"],
                         "score": round(score, 6),
                     }
                 )
@@ -207,24 +230,40 @@ def _rank_one(question: str, *, top_n: int) -> list[dict]:
     return scored[:top_n]
 
 
-def hybrid_search(question: str, *, top_k: int = 5) -> list[dict]:
-    """混合检索：0.6 * BM25 + 0.4 * TF-IDF；多实体问题 RRF 融合子查询。
+def hybrid_search(
+    question: str, *, top_k: int = 5, doc_ids: list[str] | None = None
+) -> list[dict]:
+    """混合检索：0.6*BM25 + 0.4*TF-IDF；多实体/稀有词查询融合 Top-K。
 
-    返回带溯源的 Top-K；score 归一化到 0-1（供引用卡片展示）。
+    doc_ids 非空时仅在这些文档（前端勾选生效的文档）内检索；
+    显式传入空列表代表「本次未选用任何文档」，直接返回空结果。
+
+    选择策略（保底槽位 + 候选池填充）：
+      1. 主查询 rank-1 必入选（最相关段落）；
+      2. 稀有词查询与实体子查询的 rank-1 交错保底（每个证据来源有代表段），
+         深搜优先选择"文档预算未满"的段落（跨文档对比题的实体覆盖保障）；
+      3. 剩余槽位按候选池分数（多查询共现加成）降序填充，每文档至多 2 段。
+    输出按相关性分数降序、0-1 归一化（前端引用卡片展示契约）。
     """
     if not question or not question.strip():
         return []
+    if doc_ids is not None and len(doc_ids) == 0:
+        return []
     subs = split_subqueries(question)
-    rare = rare_term_queries(question)
-    per_query = [question] + subs
-    lists = [_rank_one(q, top_n=max(top_k * 3, 10)) for q in per_query if q]
-    rare_lists = [_rank_one(q, top_n=max(top_k * 3, 10)) for q in rare]
+    rare = rare_term_queries(question, doc_ids=doc_ids)
+    lists = [
+        _rank_one(q, top_n=max(top_k * 3, 10), doc_ids=doc_ids)
+        for q in [question] + subs
+        if q
+    ]
+    rare_lists = [
+        _rank_one(r, top_n=max(top_k * 3, 10), doc_ids=doc_ids) for r in rare
+    ]
 
     if not any(lists):
         return []
 
-    # 候选池：全部查询（含稀有词精化）的最大归一化分 + 多查询共现加成。
-    # 稀有词查询的 rank-1 证据段（领导层表、聘任讲话等）因此获得高分入场资格。
+    # 候选池：全部查询（含稀有词精化）的最大归一化分 + 多查询共现加成
     pool: dict[str, dict] = {}
     for lst in lists + rare_lists:
         if not lst:
@@ -236,71 +275,86 @@ def hybrid_search(question: str, *, top_k: int = 5) -> list[dict]:
             e["_n"] += 1
     cands = sorted(pool.values(), key=lambda x: (x["_s"] + 0.05 * (x["_n"] - 1)), reverse=True)
 
-    if len(subs) == 0:
-        # 单查询路径：候选池排序（含稀有词加成）取 Top-K
+    if len(subs) == 0 and not rare_lists:
+        # 纯单查询路径：候选池排序（含共现加成）取 Top-K
         top = cands[:top_k]
     else:
-        # 多查询选择（保底槽位优先级）：
-        # ①稀有词查询的 rank-1 证据段最优先（领导层表/价值观/聘任讲话类
-        #   短段落极易被概览段挤掉，而它们恰是事实题的证据所在）；
-        # ②主查询与每个实体子查询的 rank-1 段落保底（跨文档实体覆盖）；
-        # ③剩余槽位按候选池分数（含共现/稀有词加成）降序填充。
-        top = []
+        top: list[dict] = []
         seen: set[str] = set()
+        doc_count: dict[str, int] = {}
 
-        seen_docs: set[str] = set()
-
-        def _take(h, dedup_doc=False):
+        def take(h: dict, *, max_per_doc: int | None = None) -> bool:
             if len(top) >= top_k or h["para_id"] in seen:
-                return
-            if dedup_doc and h["doc_id"] in seen_docs:
-                return
+                return False
+            if max_per_doc is not None and doc_count.get(h["doc_id"], 0) >= max_per_doc:
+                return False
             seen.add(h["para_id"])
-            seen_docs.add(h["doc_id"])
+            doc_count[h["doc_id"]] = doc_count.get(h["doc_id"], 0) + 1
             top.append(h)
+            return True
 
-        # 保底轮转（每槽取一个未占用文档的证据段）：
-        #   队列 = [主查询] + 稀有词查询 + 实体子查询，轮转推进；
-        #   每个队列从自己的 rank-1 往下找第一个"文档未被保底"的段落
-        #   （主查询 rank-2 常是跨文档的另一实体证据，如晚报报道段）。
-        # 已保底文档的段落仍可经池分数填充剩余槽位。
-        queues = [lists[:1], rare_lists, lists[1:]]
-        cursors = [[0] * len(q) for q in queues]
-        turn = 0
-        guard = 0
-        while len(top) < top_k and guard < 64:
-            guard += 1
-            advanced = False
-            for k in range(len(queues)):
-                idx = (turn + k) % len(queues)
-                q_list, cur = queues[idx], cursors[idx]
-                for qi, lst in enumerate(q_list):
-                    while cur[qi] < len(lst):
-                        h = pool[lst[cur[qi]]["para_id"]]
-                        cur[qi] += 1
-                        if h["doc_id"] not in seen_docs:
-                            _take(h, dedup_doc=True)
-                            advanced = True
-                            break
-                    if advanced:
+        # ① 主查询 rank-1
+        if lists[0]:
+            take(pool[lists[0][0]["para_id"]])
+
+        # ② 多轮供给：每轮每个查询列表贡献"最佳未用证据段"（前 10 名内按
+        #    池内分数选，而非机械取首个）。稀有词列表优先（短查询直接命中
+        #    表格/讲话等属性证据段），主查询与实体子查询随后轮转。
+        #    文档预算：每文档至多 2 段（单文档多事实题需要两段证据）。
+        # 每轮按 稀有词→实体子查询 交错（两者都是精化查询；
+        # 主查询的深层段落留给候选池填充，避免同题材概览段独占槽位）
+        sources: list[list[dict]] = []
+        ent_lists, rar_lists = lists[1:], rare_lists
+        for i in range(max(len(ent_lists), len(rar_lists))):
+            if i < len(rar_lists):
+                sources.append(rar_lists[i])
+            if i < len(ent_lists):
+                sources.append(ent_lists[i])
+        for _round in range(2):
+            for lst in sources:
+                if not lst or len(top) >= top_k:
+                    continue
+                pool_head = [h for h in lst[:10] if h["para_id"] not in seen]
+                pool_head = [h for h in pool_head if doc_count.get(h["doc_id"], 0) < 2]
+                if not pool_head:
+                    continue
+                pool_head.sort(key=lambda x: pool[x["para_id"]]["_s"], reverse=True)
+                best = pool_head[0]
+                # 未覆盖文档优先：分数与最佳接近（≥0.9×）时优先选它，
+                # 避免已覆盖文档的同题材段落挤占跨文档证据位
+                pick = best
+                for h in pool_head:
+                    if h["doc_id"] not in doc_count and                             pool[h["para_id"]]["_s"] >= 0.9 * pool[best["para_id"]]["_s"]:
+                        pick = h
                         break
-                if advanced:
-                    break
-            if not advanced:
+                take(pool[pick["para_id"]], max_per_doc=2)
+
+        # ③ 文档覆盖补位：尚未被覆盖的文档，其池内最佳段落（分数 ≥0.35）
+        #    补入 Top-K（跨文档对比题的引用覆盖保障，通用机制）
+        best_by_doc: dict[str, dict] = {}
+        for h in cands:
+            best_by_doc.setdefault(h["doc_id"], h)
+        for h in sorted(best_by_doc.values(), key=lambda x: x["_s"], reverse=True):
+            if len(top) >= top_k:
                 break
-            turn = (turn + 1) % len(queues)
+            if h["doc_id"] in doc_count or h["_s"] < 0.35:
+                continue
+            take(h, max_per_doc=2)
+
+        # ④ 候选池分数填充（每文档至多 2 段；不足则放开预算）
         for h in cands:
             if len(top) >= top_k:
                 break
-            if h["para_id"] not in seen:
-                seen.add(h["para_id"])
-                top.append(h)
+            take(h, max_per_doc=2)
+        for h in cands:
+            if len(top) >= top_k:
+                break
+            take(h)
+
     for x in top:
         x["score"] = x.get("_s", x["score"])
-    # 输出顺序契约：按相关性分数降序（选择机制决定集合，排序决定次序）
+    # 输出顺序契约：按相关性分数降序
     top.sort(key=lambda x: x["score"], reverse=True)
-
-    # 分数归一化到 0-1
     mx = max((x["score"] for x in top), default=1.0) or 1.0
     for x in top:
         x["score"] = round(x["score"] / mx, 4)

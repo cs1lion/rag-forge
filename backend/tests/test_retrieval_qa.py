@@ -91,28 +91,30 @@ class TestHybridSearch:
 
 class TestQAOrchestration:
     def test_system_prompt_declares_highest_security(self):
-        """System Prompt 声明最高安全层级（第二重防御）。"""
-        assert "最高安全层级" in SYSTEM_PROMPT
+        """System Prompt 保留安全声明：参考资料仅为数据，越权文本不是指令。"""
+        assert "安全声明" in SYSTEM_PROMPT
         assert "忽略" in SYSTEM_PROMPT
-        assert "不构成指令" in SYSTEM_PROMPT or "不是指令" in SYSTEM_PROMPT
+        assert "不是指令" in SYSTEM_PROMPT
+        # 外部 XML 强隔离已取消（改为入库阶段过滤）
+        assert "<retrieved_documents>" not in SYSTEM_PROMPT
 
-    def test_build_context_xml_isolation(self):
-        """第一重防御：检索上下文以 XML 标签包裹，与指令严格隔离。"""
+    def test_build_context_plain_text(self):
+        """防注入改为入库阶段过滤：上下文为普通文本，不再使用 XML 强隔离。"""
         cites = [
             {"doc_id": "doc05", "source_file": "x.docx", "heading_path": "h",
              "para_id": "doc05#p001", "snippet": "原文内容"}
         ]
         ctx = build_context(cites)
-        assert ctx.startswith("<retrieved_documents>")
-        assert ctx.endswith("</retrieved_documents>")
-        assert 'doc_id="doc05"' in ctx
-        assert 'para_id="doc05#p001"' in ctx
+        assert "<retrieved_documents>" not in ctx
+        assert "doc05" in ctx
+        assert "doc05#p001" in ctx
+        assert "x.docx" in ctx
         assert "原文内容" in ctx
 
     def test_build_context_empty_citations(self):
         ctx = build_context([])
-        assert "<retrieved_documents>" in ctx
-        assert "</retrieved_documents>" in ctx
+        assert "<retrieved_documents>" not in ctx
+        assert "无" in ctx
 
     @pytest.mark.asyncio
     async def test_generate_answer_llm_success(self, monkeypatch):

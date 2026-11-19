@@ -283,7 +283,50 @@ def _extract_doc_utf16(raw: bytes) -> str | None:
     except Exception:
         return None
     lines = [ln.strip() for ln in text.replace("\r\n", "\n").replace("\r", "\n").split("\n")]
-    kept = [ln for ln in lines if ln and sum(1 for c in ln if "一" <= c <= "鿿") >= 2]
+
+    def _is_text_char(c: str) -> bool:
+        """可打印文本字符：CJK / CJK 标点 / 全角符号 / ASCII 可打印 / 常用符号。
+
+        控制符、私用区、代理区、替换符、Hangul/天城文等二进制乱码字符
+        一律视为噪声（作为文本段分隔符）。
+        """
+        o = ord(c)
+        if "一" <= c <= "鿿":
+            return True
+        if 0x3000 <= o <= 0x303F:  # CJK 标点
+            return True
+        if 0xFF00 <= o <= 0xFFEF:  # 全角符号（含全角括号/逗号）
+            return True
+        if 32 <= o <= 126:  # ASCII 可打印
+            return True
+        return c in "　，。；：、“”‘’（）《》！？—…·≥≤→←↔℃■□●○◆◇★☆"
+
+    def _real_segments(ln: str) -> list[str]:
+        """从（可能混入二进制噪声的）行中切出连续真实文本段。"""
+        segs, buf = [], []
+        for c in ln:
+            if _is_text_char(c):
+                buf.append(c)
+            else:
+                if buf:
+                    segs.append("".join(buf))
+                    buf = []
+        if buf:
+            segs.append("".join(buf))
+        return segs
+
+    kept = []
+    for ln in lines:
+        for seg in _real_segments(ln):
+            seg = seg.strip()
+            if not seg:
+                continue
+            cjk = sum(1 for c in seg if "一" <= c <= "鿿")
+            visible = sum(1 for c in seg if not c.isspace())
+            # 真实中文段：CJK ≥4 且占比 ≥0.3（纯日期段"2024 年 8 月 20 日"≈0.3；
+            # ≥4 过滤二进制噪声的随机 2–3 字 CJK 碎片，如"卋卋"）
+            if cjk >= 4 and cjk / max(visible, 1) >= 0.3:
+                kept.append(seg)
     if not kept:
         return None
     joined = "\n".join(kept)

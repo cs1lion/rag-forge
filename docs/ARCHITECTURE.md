@@ -53,6 +53,7 @@
 | parse_method | TEXT | 解析方式说明 |
 | char_count | INTEGER | 有效字数 |
 | injection_flag | INTEGER | 是否含疑似越权指令文本（0/1） |
+| quarantined | INTEGER | 隔离开关（0/1）：1=整篇不参与检索；0=可检索（注入风险在结果中提示） |
 | created_at | TEXT | 入库时间 |
 
 ### chunks
@@ -104,6 +105,11 @@
 2. 命中段落**不进入 `chunks` 检索语料**，仅在 `documents.injection_flag` 记 1，
    原文隔离存档（可溯源但不参与召回）；
 3. 问答时该段永不进入检索上下文。
+
+**隔离文档开关（会话 6）**：`documents.quarantined` 为文档级开关（默认 0）。
+开启后该文档整篇排除出检索候选池；关闭时文档可被召回，其 `injection_flag=1`
+随检索结果返回，前端在引用来源条中提示"含疑似越权指令文本，但未开启隔离"。
+两级防护不冲突：命中的注入段落始终不进 `chunks`，开关只控制整篇文档的选用与否。
 
 ## 4. 混合检索与引用溯源（零外部 Embedding）
 

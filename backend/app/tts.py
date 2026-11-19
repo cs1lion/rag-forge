@@ -20,6 +20,10 @@ class TTSError(RuntimeError):
     """TTS 合成失败（含无可用供应商）。"""
 
 
+# edge-tts 失败重试间隔（秒）：首次失败后 1s、2s 各重试一次
+EDGE_TTS_RETRY_DELAYS: tuple[int, ...] = (1, 2)
+
+
 def _probe_wav(path: Path) -> tuple[int, int]:
     """返回 (采样率, 声道数)。"""
     with wave.open(str(path), "rb") as w:
@@ -43,8 +47,20 @@ async def synth(text: str, out_wav: Path, *, voice: str | None = None) -> dict:
         import edge_tts
 
         v = voice or settings.edge_tts_voice or "zh-CN-XiaoxiaoNeural"
-        communicate = edge_tts.Communicate(text, voice=v)
-        await communicate.save(str(out_wav))
+        # 高并发压测下偶发网络断连：指数退避重试 2 次（间隔 1s、2s）
+        last_err: Exception | None = None
+        for delay in (0, *EDGE_TTS_RETRY_DELAYS):
+            if delay:
+                await asyncio.sleep(delay)
+            try:
+                communicate = edge_tts.Communicate(text, voice=v)
+                await communicate.save(str(out_wav))
+                last_err = None
+                break
+            except Exception as e:  # 网络断连/超时/服务端 5xx
+                last_err = e
+        if last_err is not None:
+            raise last_err
         fmt = "edge-tts"
     elif provider == "openai":
         if not settings.openai_tts_api_key:

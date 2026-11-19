@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from .db import get_conn
-from .injection import scan_injection
+from .injection import RISK_WARNING_MESSAGE, strip_injection
 from .parsers import BlockType, Para, Section, parse_file
 
 
@@ -32,6 +32,7 @@ class IngestResult:
     chunk_count: int
     injection_excerpt_count: int
     created_at: str
+    risk_warning: str | None = None
 
 
 # ---------------------------------------------------------------- 工具
@@ -57,6 +58,11 @@ def tokenize(text: str) -> list[str]:
         else:
             tokens.append(s)
     return tokens
+
+
+def _meaningful(text: str) -> bool:
+    """剥离后是否仍有实质内容（至少一个 CJK 或字母数字；纯标点/空白丢弃）。"""
+    return any(("一" <= ch <= "鿿") or ch.isalnum() for ch in text)
 
 
 def _heading_path(title: str, section_heading: str) -> str:
@@ -137,22 +143,24 @@ def ingest_file(
     if not blocks:
         raise ValueError(f"解析结果无内容块: {p}")
 
-    # 注入隔离扫描（入库即执行）
+    # 注入识别与过滤（入库解析阶段执行）：命中注入模式的句子从切块文本中
+    # 自动剥离；整段被剥离的段落不进 chunks，剥离原文隔离存档（可溯源）。
     kept: list[tuple[Section, Para]] = []
     isolated: list[dict] = []
     for sec, para in blocks:
-        hits = scan_injection(para.text)
+        clean, removed, hits = strip_injection(para.text)
         if hits:
             isolated.append(
                 {
                     "heading_path": _heading_path(title, sec.heading),
                     "block_type": para.type.value,
-                    "text": para.text,
+                    "text": "".join(removed) if removed else para.text,
                     "matched_keywords": hits,
                 }
             )
-        else:
-            kept.append((sec, para))
+        if clean and _meaningful(clean):
+            # 部分剥离：保留移除注入句后的正常内容（纯标点残片不入库）
+            kept.append((sec, Para(type=para.type, text=clean)))
 
     # 稀疏向量：语料级统计（仅针对保留块）
     term_freqs: list[dict[str, int]] = []
@@ -179,7 +187,8 @@ def ingest_file(
         existing = cur.fetchone()
         if existing:
             row = conn.execute(
-                "SELECT doc_id, char_count, injection_flag, created_at FROM documents WHERE id = ?",
+                "SELECT doc_id, char_count, injection_flag, risk_warning, created_at"
+                " FROM documents WHERE id = ?",
                 (existing["id"],),
             ).fetchone()
             chunks = conn.execute(
@@ -200,13 +209,16 @@ def ingest_file(
                 chunk_count=chunks,
                 injection_excerpt_count=injs,
                 created_at=row["created_at"],
+                risk_warning=row["risk_warning"],
             )
 
         doc_id = _next_doc_id(conn)
         char_count = sum(para.chars for _, para in kept)
+        risk_warning = RISK_WARNING_MESSAGE if isolated else None
         conn.execute(
             "INSERT INTO documents (doc_id, title, source_file, source_format, parse_method,"
-            " char_count, injection_flag, created_at) VALUES (?,?,?,?,?,?,?,?)",
+            " char_count, injection_flag, risk_warning, created_at)"
+            " VALUES (?,?,?,?,?,?,?,?,?)",
             (
                 doc_id,
                 title,
@@ -215,6 +227,7 @@ def ingest_file(
                 parse_method,
                 char_count,
                 1 if isolated else 0,
+                risk_warning,
                 created_at,
             ),
         )
@@ -264,6 +277,7 @@ def ingest_file(
         chunk_count=len(kept),
         injection_excerpt_count=len(isolated),
         created_at=created_at,
+        risk_warning=risk_warning,
     )
 
 

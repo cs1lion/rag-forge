@@ -39,6 +39,9 @@ def api_client(tmp_path, monkeypatch):
 
     monkeypatch.setattr("app.main.get_conn", lambda db_path=None: db.get_conn(test_db))
     monkeypatch.setattr("app.retrieval.get_conn", lambda db_path=None: db.get_conn(test_db))
+    # 上传走 ingest_file → ingestion.get_conn：不 patch 会把测试文档写进生产库（污染语料）
+    monkeypatch.setattr("app.ingestion.get_conn", lambda db_path=None: db.get_conn(test_db))
+    # lifespan 的初始入库扫描同样重定向（语料已非空会跳过，双保险）
     monkeypatch.setattr("app.main.UPLOADS_DIR", tmp_path / "uploads")
     # 视频目录隔离；调度器不启动（TestClient lifespan 会起，改为 mock render 快速完成）
     with TestClient(app) as client:
@@ -375,35 +378,42 @@ class TestTts:
 class TestVideoOrchestration:
     @pytest.mark.asyncio
     async def test_render_qa_video_stages_and_mux(self, tmp_path, monkeypatch):
-        """四阶段编排：script→tts→render→mux；进度单调不减；产物真实落盘。"""
+        """四阶段编排：script→tts→render→mux；逐页 TTS 时长驱动帧数；进度单调不减。"""
         from app import video as video_mod
 
-        segs = [
-            {"kind": "title", "title": "问", "subtitle": "", "narration": "问题是：问"},
-            {"kind": "body", "title": "答。", "subtitle": "", "narration": "答。"},
+        pages = [
+            {"kind": "question", "label": "问题检索", "title": "问？", "meta": "m", "narration": "问题是：问"},
+            {"kind": "answer", "label": "核心解答", "recap": "问？", "summary": "答。",
+             "points": ["要点"], "narration": "答。"},
+            {"kind": "citations", "label": "引用参考文档", "citations": [], "narration": "无引用。"},
         ]
 
         async def fake_script(q, a, c):
-            return segs, "rule"
+            return pages, "rule"
 
         async def fake_synth(text, wav, **kw):
-            _write_wav(Path(wav), seconds=0.15)
-            return {"seconds": 0.15, "format": "edge-tts", "voice": "v",
+            _write_wav(Path(wav), seconds=0.5)
+            return {"seconds": 0.5, "format": "edge-tts", "voice": "v",
                     "sample_rate": 24000, "channels": 1, "bytes": 100}
 
-        async def fake_render(segments, out_path, prefer="remotion"):
-            # 真实无声底片：用 ffmpeg 生成 1 秒纯色视频
+        seen = {}
+
+        async def fake_render(render_pages_arg, out_path, prefer="remotion"):
+            seen["frames"] = [p.get("frames") for p in render_pages_arg]
+            seen["durations"] = [p.get("duration") for p in render_pages_arg]
+            # 真实无声底片：总时长 = 各页帧数之和 / 24
+            total = sum(p["frames"] for p in render_pages_arg) / 24
             proc = await asyncio.create_subprocess_exec(
-                "ffmpeg", "-y", "-f", "lavfi", "-i", "color=c=white:s=320x240:d=1:r=24",
+                "ffmpeg", "-y", "-f", "lavfi", "-i", f"color=c=white:s=320x240:d={total}:r=24",
                 "-c:v", "libx264", "-pix_fmt", "yuv420p", str(out_path),
                 stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
             await proc.wait()
             assert proc.returncode == 0
-            return {"path": str(out_path), "seconds": 1, "engine": "pil"}
+            return {"path": str(out_path), "seconds": total, "engine": "pil"}
 
         monkeypatch.setattr(video_mod, "build_video_script", fake_script)
         monkeypatch.setattr(video_mod, "synth", fake_synth)
-        monkeypatch.setattr(video_mod, "render_segments", fake_render)
+        monkeypatch.setattr(video_mod, "render_pages", fake_render)
 
         progress = []
         out = tmp_path / "qa_video.mp4"
@@ -412,9 +422,14 @@ class TestVideoOrchestration:
             on_progress=lambda s, p: progress.append((s, p)),
         )
         assert out.exists() and out.stat().st_size > 1000
-        assert result["segments"] == 2
+        assert result["segments"] == 3 and result["pages"] == 3
         assert result["stages"] == ["script", "tts", "render", "mux"]
         assert result["script_method"] == "rule"
+        # 每页帧数 = (语音 0.5s + 呼吸停顿 0.4s) × 24 ≈ 22 帧
+        assert seen["frames"] == [22, 22, 22]
+        assert all(abs(d - 22 / 24) < 1e-3 for d in seen["durations"])
+        # 成片总时长 = 66 帧 / 24fps = 2.75s（三页完整播完，不因音轨截断）
+        assert abs(result["seconds"] - 2.75) < 0.05
         pcts = [p for _, p in progress]
         assert pcts == sorted(pcts)  # 单调不减
         assert pcts[-1] == 1.0
@@ -538,6 +553,86 @@ class TestQaRetry:
             with pytest.raises(RuntimeError, match="429"):
                 await generate_answer("Q", [])
 
+    def test_looks_truncated_heuristic(self):
+        """句中断尾启发式：逗号/连词/未闭合括号收尾视为可疑。"""
+        from app.qa import _looks_truncated
+        assert _looks_truncated("华联考研在招生推文中明确表示，把") is True
+        assert _looks_truncated("答案写到一半，") is True
+        assert _looks_truncated("（网名") is True
+        assert _looks_truncated("完整的答案。") is False
+        assert _looks_truncated("") is False
+
+    @pytest.mark.asyncio
+    async def test_suspicious_answer_retried(self, monkeypatch):
+        """合法 JSON 但句中断尾 → 重试后得到完整答案。"""
+        from app.config import settings
+        from app.qa import generate_answer
+        monkeypatch.setattr(settings, "llm_api_key", "k", raising=False)
+        monkeypatch.setattr(settings, "llm_base_url", "http://x", raising=False)
+        monkeypatch.setattr(settings, "llm_model", "m", raising=False)
+
+        calls = {"n": 0}
+
+        class FakeResp:
+            def __init__(self, answer):
+                self.answer = answer
+
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return {"choices": [{
+                    "finish_reason": "stop",
+                    "message": {"content": json.dumps(_fake_llm_answer(answer=self.answer))},
+                }]}
+
+        async def flaky(self, url, json=None, headers=None):
+            calls["n"] += 1
+            return FakeResp("写到一半，把" if calls["n"] == 1 else "完整的一句话。")
+
+        monkeypatch.setattr("httpx.AsyncClient.post", flaky)
+        result = await generate_answer("Q", [])
+        assert calls["n"] == 2
+        assert result["answer"] == "完整的一句话。"
+
+    @pytest.mark.asyncio
+    async def test_truncated_output_retries_with_larger_budget(self, monkeypatch):
+        """finish_reason=length（输出截断）→ 提升 max_tokens 重试 → 完整答案。"""
+        from app.config import settings
+        from app.qa import generate_answer
+        monkeypatch.setattr(settings, "llm_api_key", "k", raising=False)
+        monkeypatch.setattr(settings, "llm_base_url", "http://x", raising=False)
+        monkeypatch.setattr(settings, "llm_model", "m", raising=False)
+        monkeypatch.setattr(settings, "llm_max_tokens", 128, raising=False)
+
+        calls = {"n": 0, "budgets": []}
+
+        class FakeResp:
+            def __init__(self, finish):
+                self.finish = finish
+
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return {"choices": [{
+                    "finish_reason": self.finish,
+                    "message": {"content": json.dumps(_fake_llm_answer(answer="完整答案。"))},
+                }]}
+
+        async def truncating_post(self, url, json=None, headers=None):
+            calls["n"] += 1
+            calls["budgets"].append(json.get("max_tokens"))
+            if calls["n"] == 1:
+                return FakeResp("length")
+            return FakeResp("stop")
+
+        monkeypatch.setattr("httpx.AsyncClient.post", truncating_post)
+        result = await generate_answer("Q", [])
+        assert calls["n"] == 2
+        assert calls["budgets"][1] == 256  # 截断后 max_tokens ×2
+        assert result["answer"] == "完整答案。"
+
     @pytest.mark.asyncio
     async def test_empty_refusal_normalized_to_none(self, monkeypatch):
         from app.config import settings
@@ -567,22 +662,91 @@ class TestQaRetry:
 class TestPilRenderReal:
     @pytest.mark.asyncio
     async def test_pil_render_real_frames_and_duration(self, tmp_path):
-        """PIL 兜底真实渲染：帧数=段数、时长=4s×段数、out_path 落盘。"""
-        from app.video_render import render_segments
-        segs = [
-            {"kind": "title", "title": "问题标题", "subtitle": "", "narration": "n"},
-            {"kind": "body", "title": "答案正文一句。", "subtitle": "", "narration": "n"},
+        """PIL 真实渲染：逐帧 PNG 数=总帧数、时长=帧数/24、out_path 落盘。"""
+        from app.video_render import render_pages
+        pages = [
+            {"kind": "question", "label": "问题检索", "title": "问题标题" * 8,
+             "meta": "知识库检索", "narration": "n", "frames": 12},
+            {"kind": "answer", "label": "核心解答", "recap": "问题？",
+             "summary": "结论包含 75% 与 11 亿元。", "points": ["要点一", "要点二"],
+             "narration": "n", "frames": 18},
+            {"kind": "citations", "label": "引用参考文档",
+             "citations": [{"source_file": "f.docx", "heading_path": "h > s", "snippet": "摘录"}],
+             "narration": "n", "frames": 10},
         ]
         out = tmp_path / "pil.mp4"
-        result = await render_segments(segs, out, prefer="pil")
+        result = await render_pages(pages, out, prefer="pil")
         assert result["engine"] == "pil"
         assert out.exists() and out.stat().st_size > 1000
-        frames = list((out.with_suffix(".parts") / "frames").glob("seg*.png"))
-        assert len(frames) == 2
-        # ffprobe 时长 ≈ 8s
+        frames = list((out.with_suffix(".parts") / "frames").glob("frame*.png"))
+        assert len(frames) == 12 + 18 + 10
+        # ffprobe 时长 ≈ 40/24 ≈ 1.667s
         proc = await asyncio.create_subprocess_exec(
             "ffprobe", "-v", "error", "-show_entries", "format=duration",
             "-of", "default=nw=1:nk=1", str(out),
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
         stdout, _ = await proc.communicate()
-        assert abs(float(stdout.decode().strip()) - 8.0) < 0.5
+        assert abs(float(stdout.decode().strip()) - 40 / 24) < 0.15
+
+
+class TestTtsRetry:
+    @pytest.mark.asyncio
+    async def test_edge_tts_retries_with_backoff(self, tmp_path, monkeypatch):
+        """edge-tts 偶发断连：1s/2s 两次指数退避后成功。"""
+        from app import tts as tts_mod
+        from app.config import settings
+
+        monkeypatch.setattr(settings, "tts_provider", "edge-tts")
+        delays: list[float] = []
+
+        async def fake_sleep(d):
+            delays.append(d)
+
+        monkeypatch.setattr("app.tts.asyncio.sleep", fake_sleep)
+        calls = {"n": 0}
+
+        class Flaky:
+            def __init__(self, text, voice=None):
+                pass
+
+            async def save(self, out):
+                calls["n"] += 1
+                if calls["n"] < 3:
+                    raise ConnectionError("connection reset")
+                _write_wav(Path(out), seconds=0.2, sr=24000)
+
+        import edge_tts
+        monkeypatch.setattr(edge_tts, "Communicate", Flaky)
+        out = tmp_path / "retry.wav"
+        info = await tts_mod.synth("重试测试", out)
+        assert calls["n"] == 3
+        assert delays == [1, 2]
+        assert info["format"] == "edge-tts"
+        assert out.exists()
+
+    @pytest.mark.asyncio
+    async def test_edge_tts_retries_exhausted_raises(self, tmp_path, monkeypatch):
+        """两次重试仍失败 → 抛出原异常。"""
+        from app import tts as tts_mod
+        from app.config import settings
+
+        monkeypatch.setattr(settings, "tts_provider", "edge-tts")
+        delays: list[float] = []
+
+        async def fake_sleep(d):
+            delays.append(d)
+
+        monkeypatch.setattr("app.tts.asyncio.sleep", fake_sleep)
+
+        class AlwaysFail:
+            def __init__(self, text, voice=None):
+                pass
+
+            async def save(self, out):
+                raise ConnectionError("down")
+
+        import edge_tts
+        monkeypatch.setattr(edge_tts, "Communicate", AlwaysFail)
+        with pytest.raises(ConnectionError):
+            await tts_mod.synth("始终失败", tmp_path / "x.wav")
+        assert delays == [1, 2]

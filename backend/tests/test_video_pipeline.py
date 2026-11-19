@@ -24,7 +24,8 @@ from app.video_queue import (
     run_dispatcher,
     video_lock,
 )
-from app.video_render import _ensure_project, _tokens_from_css, render_segments
+from app.video_render import _ensure_project, _page_frames, _tokens_from_css, render_pages
+from app.video_render import _wrap as _wrap_text
 from app.video_script import (
     _fallback_script,
     _validate_script,
@@ -40,13 +41,11 @@ KB = Path(__file__).resolve().parents[2] / "知识库"
 class TestVideoScript:
     @pytest.mark.asyncio
     async def test_llm_script_path(self, monkeypatch):
-        """LLM 返回合法分镜 JSON -> method='llm'，段落逐字来自 answer。"""
+        """LLM 返回合法提炼 -> method='llm'，固定三页结构。"""
         fake_resp = {
-            "segments": [
-                {"kind": "title", "title": "Q?", "narration": "问题是：Q?"},
-                {"kind": "body", "title": "A1。", "narration": "A1。"},
-                {"kind": "citations", "title": "引用参考", "subtitle": "x", "narration": "引用 1 段"},
-            ]
+            "summary": "研发投入占营收超过 75%。",
+            "points": ["2025 年研发投入 11 亿元", "研发人员占比 70%"],
+            "narration": "核心结论：研发投入占营收超过 75%。",
         }
 
         class FakeResp:
@@ -66,14 +65,16 @@ class TestVideoScript:
         monkeypatch.setattr(settings, "llm_base_url", "http://x", raising=False)
         monkeypatch.setattr(settings, "llm_model", "m", raising=False)
 
-        segs, method = await build_video_script("Q?", "A1。", [])
+        pages, method = await build_video_script("Q?", "A1。", [])
         assert method == "llm"
-        assert segs[0]["kind"] == "title"
-        assert segs[1]["title"] == "A1。"
+        assert [p["kind"] for p in pages] == ["question", "answer", "citations"]
+        assert pages[1]["summary"] == "研发投入占营收超过 75%。"
+        assert pages[1]["points"][0] == "2025 年研发投入 11 亿元"
+        assert pages[0]["title"] == "Q?"
 
     @pytest.mark.asyncio
     async def test_llm_schema_invalid_falls_back(self, monkeypatch):
-        """LLM 输出缺必填字段 -> Schema 校验失败 -> 规则降级。"""
+        """LLM 输出缺必填字段 -> Schema 校验失败 -> 规则降级（仍为三页）。"""
         class FakeResp:
             def raise_for_status(self):
                 pass
@@ -91,10 +92,10 @@ class TestVideoScript:
         monkeypatch.setattr(settings, "llm_base_url", "http://x", raising=False)
         monkeypatch.setattr(settings, "llm_model", "m", raising=False)
 
-        segs, method = await build_video_script("Q?", "答案一句。", [])
+        pages, method = await build_video_script("Q?", "答案一句。", [])
         assert method == "rule"
-        assert segs[0]["kind"] == "title"
-        assert segs[1]["narration"] == "答案一句。"
+        assert [p["kind"] for p in pages] == ["question", "answer", "citations"]
+        assert pages[1]["summary"] == "答案一句。"
 
     @pytest.mark.asyncio
     async def test_llm_exception_falls_back(self, monkeypatch):
@@ -109,9 +110,9 @@ class TestVideoScript:
             raise RuntimeError("network down")
 
         monkeypatch.setattr("httpx.AsyncClient.post", boom)
-        segs, method = await build_video_script("Q?", "真实答案。", [])
+        pages, method = await build_video_script("Q?", "真实答案。", [])
         assert method == "rule"
-        assert any(s["narration"] == "真实答案。" for s in segs)
+        assert pages[1]["summary"] == "真实答案。"
 
     @pytest.mark.asyncio
     async def test_no_key_uses_rule(self):
@@ -121,25 +122,40 @@ class TestVideoScript:
         old = (settings.llm_api_key, settings.llm_base_url, settings.llm_model)
         settings.llm_api_key = ""
         try:
-            segs, method = await build_video_script("Q?", "答。", [])
+            pages, method = await build_video_script("Q?", "答。", [])
         finally:
             settings.llm_api_key, settings.llm_base_url, settings.llm_model = old
         assert method == "rule"
+        assert len(pages) == 3
 
     def test_fallback_citations_page(self):
-        """降级分镜含引用页，narration 引用数真实。"""
-        cites = [{"doc_id": "doc05", "source_file": "a.docx"}] * 3
-        segs = _fallback_script("Q", "A。", cites)
-        kinds = [s["kind"] for s in segs]
-        assert kinds[0] == "title" and kinds[-1] == "citations"
-        assert "3 个知识库段落" in segs[-1]["narration"]
+        """降级分镜含引用页（文档卡片 + 摘录），narration 引用数真实。"""
+        cites = [
+            {"doc_id": "doc05", "source_file": "a.docx", "heading_path": "h1", "snippet": "摘录一"},
+            {"doc_id": "doc06", "source_file": "b.docx", "heading_path": "h2", "snippet": "摘录二"},
+            {"doc_id": "doc07", "source_file": "c.docx", "heading_path": "h3", "snippet": "摘录三"},
+        ]
+        pages = _fallback_script("Q", "A。", cites)
+        assert [p["kind"] for p in pages] == ["question", "answer", "citations"]
+        cite_page = pages[-1]
+        assert len(cite_page["citations"]) == 3
+        assert cite_page["citations"][0]["source_file"] == "a.docx"
+        assert "3 份知识库文档" in cite_page["narration"]
 
-    def test_fallback_split_sentences(self):
-        """降级切句：按句号切，长句按逗号再切（<=60 字）。"""
-        segs = _fallback_script("Q", "第一句。第二句。第三句。", [])
-        bodies = [s for s in segs if s["kind"] == "body"]
-        assert len(bodies) == 3
-        assert bodies[0]["title"] == "第一句。"
+    def test_fallback_summary_and_points(self):
+        """降级：首句为核心结论，其余至多 3 条要点，长句被规整。"""
+        pages = _fallback_script("Q", "第一句。第二句。第三句。第四句。", [])
+        answer = pages[1]
+        assert answer["summary"] == "第一句。"
+        assert answer["points"] == ["第二句。", "第三句。", "第四句。"]
+
+    def test_pages_always_three_even_without_citations(self):
+        """无引用时仍保留三页（第 3 页给出无引用说明）。"""
+        pages = _fallback_script("Q", "A。", [])
+        assert len(pages) == 3
+        assert pages[2]["kind"] == "citations"
+        assert pages[2]["citations"] == []
+        assert "没有引用" in pages[2]["narration"]
 
     def test_prompt_contains_real_qa(self):
         """分镜提示词不含注入指令文本，只含真实问答与引用。"""
@@ -149,16 +165,30 @@ class TestVideoScript:
         assert "忽略所有" not in p
 
     def test_validate_script_rejects_bad(self):
-        """Schema 校验：缺字段/非法 kind/非 dict 均拒绝。"""
-        assert _validate_script({"segments": []}) is None
-        assert _validate_script({"segments": [{"kind": "xx", "title": "t", "narration": "n"}]}) is None
-        assert _validate_script({"segments": [{"kind": "body", "title": "t"}]}) is None
+        """提炼结果校验：缺 summary / points 非字符串数组 / 非 dict 均拒绝。"""
+        assert _validate_script({"points": []}) is None
+        assert _validate_script({"summary": "s", "points": [1, 2], "narration": "n"}) is None
         assert _validate_script("not a dict") is None
-        ok = _validate_script({"segments": [{"kind": "body", "title": "t", "narration": "n"}]})
-        assert ok and ok[0]["subtitle"] == ""
+        ok = _validate_script({"summary": "结论", "points": ["要点"], "narration": "念白"})
+        assert ok and ok["summary"] == "结论" and ok["points"] == ["要点"]
+        # narration 缺失时由结论与要点自动拼装
+        auto = _validate_script({"summary": "结论", "points": ["要点一"]})
+        assert auto and "核心结论" in auto["narration"]
 
 
 # ================================================================ Remotion 渲染
+
+def _pages(frames=(24, 30, 36)):
+    return [
+        {"kind": "question", "label": "问题检索", "title": "问题？", "meta": "知识库检索",
+         "narration": "n1", "frames": frames[0]},
+        {"kind": "answer", "label": "核心解答", "recap": "问题？", "summary": "结论。",
+         "points": ["要点一 75%", "要点二"], "narration": "n2", "frames": frames[1]},
+        {"kind": "citations", "label": "引用参考文档",
+         "citations": [{"source_file": "f.docx", "heading_path": "h", "snippet": "摘录"}],
+         "narration": "n3", "frames": frames[2]},
+    ]
+
 
 class TestVideoRender:
     def test_tokens_from_css_match_design(self):
@@ -169,9 +199,10 @@ class TestVideoRender:
         assert t["accent"] in css
         assert t["border"] in css
         assert t["bg"] == "#FFFFFF" and t["border"] == "#E1E3E6"
+        assert t["tint_blue_bg"] == "#E3EEFC" and t["tint_blue_ink"] == "#174EA6"
 
     def test_ensure_project_writes_tsx(self, tmp_path):
-        """Remotion 工程生成：Root/QAVideo/tsconfig/package.json 齐全且含令牌。"""
+        """Remotion 工程生成：三页模板 + 折行/宽度约束 + 令牌注入。"""
         tokens = _tokens_from_css()
         wd = _ensure_project(tmp_path, tokens)
         assert (wd / "src" / "QAVideo.tsx").exists()
@@ -180,52 +211,69 @@ class TestVideoRender:
         qa = (wd / "src" / "QAVideo.tsx").read_text(encoding="utf-8")
         assert tokens["bg"] in qa
         assert tokens["border"] in qa
+        # 折行保障：88% 文本宽度 + break-word + 行高 1.65，且无 nowrap
+        assert 'maxWidth: "88%"' in qa
+        assert "break-word" in qa
+        assert "lineHeight: 1.65" in qa
+        assert "nowrap" not in qa.lower()
+        # 进度条用强调色
+        assert "progress * 100" in qa
+
+    def test_page_frames_from_duration_or_default(self):
+        assert _page_frames({}) == 4 * 24
+        assert _page_frames({"frames": 30}) == 30
+        assert _page_frames({"duration": 2.5}) == 60
+
+    def test_wrap_never_exceeds_width(self):
+        """折行后每行像素宽度不超过给定宽度（杜绝右侧截断）。"""
+        from PIL import Image, ImageDraw
+
+        from app.video_render import _font
+
+        draw = ImageDraw.Draw(Image.new("RGB", (16, 16)))
+        font = _font(18)
+        long_text = "这是一段很长的中文回答，包含数字 2025 年与 75% 的比例，用于验证自动折行。" * 3
+        for line in _wrap_text(draw, long_text, font, 300):
+            assert draw.textlength(line, font=font) <= 300 + 0.01
 
     @pytest.mark.asyncio
     async def test_render_falls_back_to_pil_when_no_remotion(self, tmp_path):
-        """Remotion 不可用 -> PIL+ffmpeg 兜底，产物真实落盘。"""
+        """Remotion 不可用 -> PIL 渲染路径，总帧数=各页 frames 之和。"""
         out = tmp_path / "v.mp4"
-        segs = [
-            {"kind": "title", "title": "问题？", "subtitle": "", "narration": "问题是：问题？"},
-            {"kind": "body", "title": "答案。", "subtitle": "", "narration": "答案。"},
-        ]
         with patch("app.video_render._remotion_available", AsyncMock(return_value=False)):
-            with patch("app.video_render._ffmpeg", AsyncMock()):
-                with patch("app.video_render._draw_pil_segment") as draw:
-                    result = await render_segments(segs, out, prefer="remotion")
+            with patch("app.video_render._render_pil", AsyncMock()) as pil:
+                result = await render_pages(_pages(), out, prefer="remotion")
         assert result["engine"] == "pil"
-        assert result["segments"] == 2
-        assert draw.call_count == 2
+        assert result["pages"] == 3
+        assert result["frames"] == 24 + 30 + 36
+        assert pil.await_count == 1
 
     @pytest.mark.asyncio
     async def test_remotion_render_invoked_when_available(self, tmp_path):
         """Remotion 可用 -> 走 remotion render（mock _render_remotion 成功）。"""
         out = tmp_path / "v.mp4"
-        segs = [{"kind": "body", "title": "A。", "subtitle": "", "narration": "A。"}]
 
-        async def fake_remotion(workdir, out_path, segments):
+        async def fake_remotion(workdir, out_path, pages):
             out_path.write_bytes(b"fake-mp4-header")
             return out_path
 
         with patch("app.video_render._remotion_available", AsyncMock(return_value=True)):
             with patch("app.video_render._render_remotion", fake_remotion):
-                result = await render_segments(segs, out, prefer="remotion")
+                result = await render_pages(_pages(), out, prefer="remotion")
         assert result["engine"] == "remotion"
 
     @pytest.mark.asyncio
     async def test_remotion_failure_degrades_to_pil(self, tmp_path):
         """Remotion render 抛异常 -> 自动降级 PIL，产物仍落盘。"""
         out = tmp_path / "v.mp4"
-        segs = [{"kind": "body", "title": "A。", "subtitle": "", "narration": "A。"}]
 
-        async def fake_remotion(workdir, out_path, segments):
+        async def fake_remotion(workdir, out_path, pages):
             raise RuntimeError("remotion boom")
 
         with patch("app.video_render._remotion_available", AsyncMock(return_value=True)):
             with patch("app.video_render._render_remotion", fake_remotion):
-                with patch("app.video_render._ffmpeg", AsyncMock()):
-                    with patch("app.video_render._draw_pil_segment"):
-                        result = await render_segments(segs, out, prefer="remotion")
+                with patch("app.video_render._render_pil", AsyncMock()):
+                    result = await render_pages(_pages(), out, prefer="remotion")
         assert result["engine"] == "pil"
 
 
@@ -460,3 +508,82 @@ class TestVideoQueueEdgeCases:
         assert "script" in stages
         assert "tts" in stages
         assert "done" in stages
+
+
+# ================================================================ 启动恢复与拒答跳过
+
+class TestQueueRecoveryAndSkip:
+    @pytest.mark.asyncio
+    async def test_restore_queue_resets_running_and_rebuilds_fifo(self, tmp_path):
+        from app import video_queue as vq
+
+        vq.reset_pending_queue()
+        test_db = tmp_path / "recover.db"
+        db.init_db(test_db)
+        with db.get_conn(test_db) as conn:
+            qid = conn.execute(
+                "INSERT INTO qa_records (question, answer, citations, created_at)"
+                " VALUES ('q', '{}', '[]', '2026-01-01T00:00:00Z')"
+            ).lastrowid
+            t_running = conn.execute(
+                "INSERT INTO video_tasks (qa_record_id, status, progress, started_at, created_at)"
+                " VALUES (?, 'running', 0.5, '2026-01-01T00:00:03Z', '2026-01-01T00:00:01Z')",
+                (qid,),
+            ).lastrowid
+            t_queued = conn.execute(
+                "INSERT INTO video_tasks (qa_record_id, status, progress, created_at)"
+                " VALUES (?, 'queued', 0.0, '2026-01-01T00:00:02Z')",
+                (qid,),
+            ).lastrowid
+            t_skipped = conn.execute(
+                "INSERT INTO video_tasks (qa_record_id, status, progress, stage_text, created_at)"
+                " VALUES (?, 'skipped', 0.0, 'x', '2026-01-01T00:00:00Z')",
+                (qid,),
+            ).lastrowid
+            conn.commit()
+            recovered = vq.restore_queue(conn)
+            statuses = {
+                r["id"]: (r["status"], r["started_at"])
+                for r in conn.execute("SELECT id, status, started_at FROM video_tasks")
+            }
+        # running + queued 按 created_at 升序（t_running 01Z 先于 t_queued 02Z）
+        assert recovered == [t_running, t_queued]
+        assert vq.drain_pending() == [t_running, t_queued]
+        assert statuses[t_running] == ("queued", None)
+        assert statuses[t_queued][0] == "queued"
+        assert statuses[t_skipped][0] == "skipped"  # 终态不参与恢复
+        vq.reset_pending_queue()
+
+    @pytest.mark.asyncio
+    async def test_enqueue_skipped_not_in_pending_queue(self, tmp_path):
+        from app import video_queue as vq
+
+        vq.reset_pending_queue()
+        test_db = tmp_path / "skip.db"
+        db.init_db(test_db)
+        with db.get_conn(test_db) as conn:
+            qid = conn.execute(
+                "INSERT INTO qa_records (question, answer, citations, created_at)"
+                " VALUES ('q', '{}', '[]', '2026-01-01T00:00:00Z')"
+            ).lastrowid
+            conn.commit()
+            task = await vq.enqueue_skipped(conn, qid)
+        assert task["status"] == "skipped"
+        assert task["stage_text"] == vq.SKIP_STAGE_TEXT
+        assert task["finished_at"]
+        assert task["video_path"] is None
+        assert vq.drain_pending() == []  # 跳过任务不进入合成队列
+        vq.reset_pending_queue()
+
+    def test_render_template_cross_platform_font(self, tmp_path):
+        from app.video_render import CROSS_PLATFORM_FONT, _ensure_project, _tokens_from_css
+
+        assert CROSS_PLATFORM_FONT == (
+            '"PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", '
+            '"Source Han Sans SC", sans-serif'
+        )
+        wd = _ensure_project(tmp_path, _tokens_from_css())
+        qa = (wd / "src" / "QAVideo.tsx").read_text(encoding="utf-8")
+        assert "PingFang SC" in qa
+        assert "Noto Sans CJK SC" in qa
+        assert "Source Han Sans SC" in qa

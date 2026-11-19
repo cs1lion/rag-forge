@@ -20,13 +20,45 @@ from .config import settings
 from .db import get_conn, init_db
 from .ingestion import ingest_file, load_initial_corpus
 from .sse import event_stream, on_video_progress
-from .video_queue import enqueue_video, get_task, queued_tasks, running_count, run_dispatcher
+from .video_queue import (
+    SKIP_STAGE_TEXT,
+    enqueue_skipped,
+    enqueue_video,
+    get_task,
+    queued_tasks,
+    restore_queue,
+    running_count,
+    run_dispatcher,
+)
 
 # 知识库语料目录（项目根 / 知识库；只读语料，任何 Agent 不得改写原文）
 KB_DIR = Path(__file__).resolve().parents[2] / "知识库"
 
 # 上传文件落盘目录（uploads 在 storage 下；解析后原始文件留存可溯源）
 UPLOADS_DIR = Path(__file__).resolve().parent.parent / "storage" / "uploads"
+
+# 后端根目录：DB 中 video_path 可能为相对路径（storage/videos/…），
+# 统一按后端目录解析，避免服务以不同 CWD 启动时视频文件解析失败。
+BACKEND_DIR = Path(__file__).resolve().parent.parent
+
+
+def _abs_video_path(p: str) -> Path:
+    path = Path(p)
+    return path if path.is_absolute() else (BACKEND_DIR / path)
+
+
+def _remove_video_artifacts(video_path: str | None) -> None:
+    """清理视频产物与分件目录；文件被占用（Windows 播放中）时不让删除失败。"""
+    if not video_path:
+        return
+    try:
+        vp = _abs_video_path(video_path)
+        vp.unlink(missing_ok=True)
+        parts = Path(str(vp) + ".parts")
+        if parts.is_dir():
+            shutil.rmtree(parts, ignore_errors=True)
+    except OSError:
+        pass  # 文件锁/权限问题：留待后续清理，不阻塞记录删除
 
 
 def _document_row(row) -> dict:
@@ -39,6 +71,7 @@ def _document_row(row) -> dict:
         "parse_method": row["parse_method"],
         "char_count": row["char_count"],
         "injection_flag": row["injection_flag"],
+        "risk_warning": row["risk_warning"] if "risk_warning" in row.keys() else None,
         "chunk_count": row["chunk_count"],
         "created_at": row["created_at"],
     }
@@ -83,6 +116,9 @@ def _qa_detail(row) -> dict:
         "refusal_reason": refusal,
         "confidence": answer_obj.get("confidence") if isinstance(answer_obj, dict) else None,
         "citations": citations,
+        "risk_warnings": (
+            answer_obj.get("risk_warnings", []) if isinstance(answer_obj, dict) else []
+        ),
     }
 
 
@@ -90,11 +126,39 @@ def _utcnow() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _task_row(t: dict, queue_position: int | None = None) -> dict:
+    """video_tasks 行 → API §4 响应（video_path 不外露，done 时映射 video_url）。"""
+    done = t.get("status") == "done" and bool(t.get("video_path"))
+    return {
+        "id": t["id"],
+        "qa_record_id": t["qa_record_id"],
+        "status": t["status"],
+        "progress": t["progress"],
+        "stage": t.get("stage") or None,
+        # skipped 任务的说明文案（如"知识库未命中，已跳过视频生成"）
+        "stage_text": t.get("stage_text"),
+        "queue_position": queue_position,
+        "video_url": f"/api/videos/{t['id']}/file" if done else None,
+        "error": t.get("error"),
+        "created_at": t["created_at"],
+        "started_at": t.get("started_at"),
+        "finished_at": t.get("finished_at"),
+    }
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
-    app.state.video_dir = Path(settings.storage_videos_dir)
+    # 视频产物目录：配置为相对路径时锚定到后端目录（不随 CWD 漂移）
+    app.state.video_dir = _abs_video_path(settings.storage_videos_dir)
     app.state.video_dir.mkdir(parents=True, exist_ok=True)
+    # 队列恢复：上一个进程中断时仍为 running 的任务重置为 queued，
+    # 并把所有 queued 按 created_at 升序重新推入内存 asyncio.Queue，
+    # 防止重启导致任务永久卡死（skipped/done/failed 不参与恢复）。
+    with get_conn() as conn:
+        recovered = restore_queue(conn)
+    if recovered:
+        print(f"[recovery] {len(recovered)} 个视频任务已重新入队: {recovered}")
     # Step 1：知识库为空则自动扫描加载初始文档（零 Mock，真实入库）
     try:
         loaded = load_initial_corpus(KB_DIR)
@@ -164,6 +228,7 @@ def create_app() -> FastAPI:
             "parse_method": result.parse_method,
             "char_count": result.char_count,
             "injection_flag": result.injection_flag,
+            "risk_warning": result.risk_warning,
             "chunk_count": result.chunk_count,
             "created_at": result.created_at,
         }}
@@ -207,7 +272,13 @@ def create_app() -> FastAPI:
     class AskReq(BaseModel):
         question: str
         history_limit: int = 10
+        # 本次问答生效的文档范围：None=全部 ready 文档；[]（显式空列表）=不选用任何文档；
+        # 非空列表=严格限定在这些文档内检索与回答。
+        selected_doc_ids: list[str] | None = None
+        # 兼容旧字段（等价于 selected_doc_ids，selected_doc_ids 优先）
+        doc_ids: list[str] | None = None
 
+    @app.post("/api/qa/ask")
     @app.post("/api/ask")
     async def ask(req: AskReq):
         """问答 + 自动创建视频任务，全过程 SSE 推送（API_SPEC §6）。"""
@@ -220,7 +291,14 @@ def create_app() -> FastAPI:
                 {"stage": "retrieval", "message": "正在检索知识库…", "progress": 0.1},
                 ensure_ascii=False,
             ) + "\n\n"
-            hits = hybrid_search(req.question, top_k=settings.retrieval_top_k)
+            scope = (
+                req.selected_doc_ids
+                if req.selected_doc_ids is not None
+                else req.doc_ids
+            )
+            hits = hybrid_search(
+                req.question, top_k=settings.retrieval_top_k, doc_ids=scope
+            )
             citations = [
                 {
                     "doc_id": h["doc_id"],
@@ -230,12 +308,27 @@ def create_app() -> FastAPI:
                     "para_id": h["para_id"],
                     "snippet": h["text"][:160],
                     "score": h["score"],
+                    # 入库时自动识别到疑似越权指令文本 → 前端在引用来源中提示风险
+                    "injection_flag": h.get("injection_flag", 0),
+                    "risk_warning": h.get("risk_warning"),
                 }
                 for h in hits
             ]
-            yield "event: qa.citations\ndata: " + json.dumps(
-                {"citations": citations}, ensure_ascii=False
-            ) + "\n\n"
+            # 汇总本次涉及文档的风险提示（同一文档去重）
+            risk_warnings: list[dict] = []
+            _seen_risk: set[str] = set()
+            for c in citations:
+                if c.get("risk_warning") and c["doc_id"] not in _seen_risk:
+                    _seen_risk.add(c["doc_id"])
+                    risk_warnings.append(
+                        {
+                            "doc_id": c["doc_id"],
+                            "source_file": c["source_file"],
+                            "risk_warning": c["risk_warning"],
+                        }
+                    )
+            # qa.citations 事件延后到回答生成之后发出（§5：引用是"回答的依据"，
+            # 拒答/空范围场景必须为空，而非检索命中集）
 
             # 2) 生成回答（真实 LLM；失败降级为安全拒答，绝不 Mock）
             yield "event: qa.progress\ndata: " + json.dumps(
@@ -253,6 +346,23 @@ def create_app() -> FastAPI:
                     "confidence": 0.0,
                     "citations": [],
                 }
+            answer["risk_warnings"] = risk_warnings
+
+            # 2.5) 引用事件语义（API_SPEC §5"citations 为空 ⇔ 拒答"双向）：
+            #      - 非拒答回答 → citations = 本轮检索证据集（回答正是基于这些
+            #        段落生成；勾选范围隔离下证据集天然 ⊆ selected_doc_ids，
+            #        不存在越界泄露）；
+            #      - 拒答（知识库未覆盖 / 空勾选范围）→ citations 必为空，
+            #        防止任何语料原文随拒答夹带输出。
+            if answer.get("refusal_reason"):
+                answer_cites = []
+            else:
+                answer_cites = list(citations[:5])
+            answer["citations"] = answer_cites
+            yield "event: qa.citations\ndata: " + json.dumps(
+                {"citations": answer_cites, "risk_warnings": risk_warnings},
+                ensure_ascii=False,
+            ) + "\n\n"
 
             # 3) 流式输出回答（逐句 delta）
             text = answer.get("answer", "")
@@ -262,17 +372,25 @@ def create_app() -> FastAPI:
                 ) + "\n\n"
                 await asyncio.sleep(0.02)
 
-            # 4) 落库 + 创建视频任务（排队）
+            # 4) 落库 + 创建视频任务：
+            #    拒答（知识库未命中 / 选中文档为空范围）→ 跳过耗时合成，任务标 skipped；
+            #    正常回答 → 进入单并发 FIFO 队列。
+            refused = bool(answer.get("refusal_reason")) or (
+                scope is not None and len(scope) == 0
+            )
             with get_conn() as conn:
                 cur = conn.execute(
                     "INSERT INTO qa_records (question, answer, citations, created_at)"
                     " VALUES (?,?,?,?)",
                     (req.question, json.dumps(answer, ensure_ascii=False),
-                     json.dumps(citations, ensure_ascii=False), _utcnow()),
+                     json.dumps(answer_cites, ensure_ascii=False), _utcnow()),
                 )
                 qa_id = cur.lastrowid
                 conn.commit()
-                task = await enqueue_video(conn, qa_id)
+                if refused:
+                    task = await enqueue_skipped(conn, qa_id)
+                else:
+                    task = await enqueue_video(conn, qa_id)
                 conn.execute(
                     "UPDATE qa_records SET video_task_id = ? WHERE id = ?",
                     (task["id"], qa_id),
@@ -284,16 +402,27 @@ def create_app() -> FastAPI:
                  "refusal_reason": refusal},
                 ensure_ascii=False,
             ) + "\n\n"
-            # 真实 FIFO 排队位置（含 running 在内的未完成任务排序）
-            with get_conn() as conn:
-                rows = conn.execute(
-                    "SELECT id FROM video_tasks WHERE status IN ('queued','running')"
-                    " ORDER BY created_at, id"
-                ).fetchall()
-            pos = next((i + 1 for i, r in enumerate(rows) if r["id"] == task["id"]), None)
-            yield "event: video.queued\ndata: " + json.dumps(
-                {"task_id": task["id"], "queue_position": pos}, ensure_ascii=False
-            ) + "\n\n"
+            if task["status"] == "skipped":
+                yield "event: video.skipped\ndata: " + json.dumps(
+                    {
+                        "task_id": task["id"],
+                        "reason": task.get("stage_text") or SKIP_STAGE_TEXT,
+                    },
+                    ensure_ascii=False,
+                ) + "\n\n"
+            else:
+                # 真实 FIFO 排队位置（含 running 在内的未完成任务排序）
+                with get_conn() as conn:
+                    rows = conn.execute(
+                        "SELECT id FROM video_tasks WHERE status IN ('queued','running')"
+                        " ORDER BY created_at, id"
+                    ).fetchall()
+                pos = next(
+                    (i + 1 for i, r in enumerate(rows) if r["id"] == task["id"]), None
+                )
+                yield "event: video.queued\ndata: " + json.dumps(
+                    {"task_id": task["id"], "queue_position": pos}, ensure_ascii=False
+                ) + "\n\n"
 
         return event_stream_gen(gen())
 
@@ -328,16 +457,53 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail={"code": "E_NOT_FOUND", "message": "问答记录不存在"})
         return {"record": _qa_detail(row)}
 
+    @app.delete("/api/qa/{qa_id}", status_code=204)
+    def delete_qa_record(qa_id: int):
+        """删除历史问答记录；其名下全部视频任务一并删除（含产物清理）。
+
+        外键双向：qa_records.video_task_id → video_tasks，video_tasks.qa_record_id → qa。
+        正确顺序：① 解除所有 qa 对相关任务的引用（含历史遗留的额外任务）；
+        ② 删任务行（running 任务的行也删——调度器后续 UPDATE 命中 0 行，无害）；
+        ③ 删问答行。
+        """
+        with get_conn() as conn:
+            row = conn.execute("SELECT id FROM qa_records WHERE id = ?", (qa_id,)).fetchone()
+            if row is None:
+                raise HTTPException(status_code=404, detail={"code": "E_NOT_FOUND", "message": "问答记录不存在"})
+            tasks = conn.execute(
+                "SELECT id, video_path FROM video_tasks WHERE qa_record_id = ?", (qa_id,)
+            ).fetchall()
+            task_ids = [t["id"] for t in tasks]
+            conn.execute("UPDATE qa_records SET video_task_id = NULL WHERE id = ?", (qa_id,))
+            if task_ids:
+                placeholders = ",".join("?" * len(task_ids))
+                conn.execute(
+                    f"UPDATE qa_records SET video_task_id = NULL WHERE video_task_id IN ({placeholders})",
+                    task_ids,
+                )
+                for t in tasks:
+                    _remove_video_artifacts(t["video_path"])
+                    conn.execute("DELETE FROM video_tasks WHERE id = ?", (t["id"],))
+            conn.execute("DELETE FROM qa_records WHERE id = ?", (qa_id,))
+            conn.commit()
+        return Response(status_code=204)
+
     # ------------------------------------------------------------- 视频任务
 
     @app.get("/api/video-tasks")
     def list_tasks():
+        """队列全貌：返回全部任务（含 done/failed），done 任务带 video_url。
+
+        历史回看依赖这里返回已完成任务（否则刷新后播放器无任务可播）。
+        """
         with get_conn() as conn:
-            tasks = [
-                {**t, "queue_position": i + 1}
-                for i, t in enumerate(queued_tasks(conn))
-            ]
+            queued = queued_tasks(conn)
+            queued_pos = {t["id"]: i + 1 for i, t in enumerate(queued)}
+            rows = conn.execute(
+                "SELECT * FROM video_tasks ORDER BY created_at, id"
+            ).fetchall()
             running = running_count(conn)
+        tasks = [_task_row(dict(r), queued_pos.get(r["id"])) for r in rows]
         return {"tasks": tasks, "running_count": running}
 
     @app.get("/api/video-tasks/{task_id}")
@@ -346,7 +512,26 @@ def create_app() -> FastAPI:
             t = get_task(conn, task_id)
         if t is None:
             return {"error": {"code": "E_NOT_FOUND", "message": "任务不存在"}}
-        return {"task": t}
+        return {"task": _task_row(t)}
+
+    @app.delete("/api/video-tasks/{task_id}", status_code=204)
+    def delete_video_task(task_id: int):
+        """删除视频任务（含产物文件清理）；运行中的任务拒绝删除（避免合成中断留下残件）。"""
+        with get_conn() as conn:
+            t = get_task(conn, task_id)
+            if t is None:
+                raise HTTPException(status_code=404, detail={"code": "E_NOT_FOUND", "message": "任务不存在"})
+            if t["status"] == "running":
+                raise HTTPException(
+                    status_code=409,
+                    detail={"code": "E_VIDEO_RUNNING", "message": "任务合成中，完成后才能删除"},
+                )
+            # 问答仍引用该任务时先解除引用（否则外键 qa→video 会阻止删除）
+            conn.execute("UPDATE qa_records SET video_task_id = NULL WHERE video_task_id = ?", (task_id,))
+            _remove_video_artifacts(t["video_path"])
+            conn.execute("DELETE FROM video_tasks WHERE id = ?", (task_id,))
+            conn.commit()
+        return Response(status_code=204)
 
     @app.get("/api/videos/{task_id}/file")
     def video_file(task_id: int):
@@ -354,7 +539,15 @@ def create_app() -> FastAPI:
             t = get_task(conn, task_id)
         if t is None or t["status"] != "done" or not t["video_path"]:
             return {"error": {"code": "E_NOT_FOUND", "message": "视频未就绪"}}
-        return FileResponse(t["video_path"], media_type="video/mp4")
+        path = _abs_video_path(t["video_path"])
+        if not path.is_file():
+            return {"error": {"code": "E_NOT_FOUND", "message": "视频文件缺失"}}
+        # inline：浏览器内在线播放；下载由前端单独的下载按钮（download 属性）触发
+        return FileResponse(
+            path,
+            media_type="video/mp4",
+            headers={"Content-Disposition": "inline"},
+        )
 
     return app
 
