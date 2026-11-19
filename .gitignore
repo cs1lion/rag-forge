@@ -43,3 +43,7 @@ __MACOSX/
 # 评估产物（Eval Agent 本地产物，不入库）
 evals/reports/
 evals/.cache/
+evals/eval_report.md
+
+# 一键启动脚本的运行日志
+logs/

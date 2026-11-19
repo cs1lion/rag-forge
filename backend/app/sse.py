@@ -35,7 +35,9 @@ def on_video_progress(task_id: int, stage: str, progress: float) -> None:
             ).fetchone()
         video_url = f"/api/videos/{task_id}/file" if t and t["video_path"] else None
         asyncio.get_event_loop().call_soon(
-            lambda: broadcast("video.done", {"task_id": task_id, "progress": 1.0, "video_url": video_url})
+            lambda: asyncio.ensure_future(
+                broadcast("video.done", {"task_id": task_id, "progress": 1.0, "video_url": video_url})
+            )
         )
     elif stage == "failed":
         with get_conn() as conn:
@@ -44,13 +46,17 @@ def on_video_progress(task_id: int, stage: str, progress: float) -> None:
             ).fetchone()
         err = (t and t["error"]) or stage
         asyncio.get_event_loop().call_soon(
-            lambda: broadcast("video.failed", {"task_id": task_id, "error": str(err)})
+            lambda: asyncio.ensure_future(
+                broadcast("video.failed", {"task_id": task_id, "error": str(err)})
+            )
         )
     else:
         asyncio.get_event_loop().call_soon(
-            lambda: broadcast(
-                "video.progress",
-                {"task_id": task_id, "stage": stage, "progress": round(progress, 4)},
+            lambda: asyncio.ensure_future(
+                broadcast(
+                    "video.progress",
+                    {"task_id": task_id, "stage": stage, "progress": round(progress, 4)},
+                )
             )
         )
 

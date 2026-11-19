@@ -137,6 +137,11 @@ def create_app() -> FastAPI:
         dest = UPLOADS_DIR / f"{uuid.uuid4().hex}{ext}"
         with open(dest, "wb") as f:
             shutil.copyfileobj(file.file, f)
+        # ingest_file 内部用默认库连接：测试/多库场景须与端点同一连接口径，
+        # 临时重定向 ingestion.get_conn 到本进程的 get_conn（可被测试 monkeypatch）。
+        import app.ingestion as _ing
+        _orig_conn = _ing.get_conn
+        _ing.get_conn = get_conn
         try:
             result = ingest_file(
                 dest,
@@ -149,6 +154,8 @@ def create_app() -> FastAPI:
                 status_code=422,
                 detail={"code": "E_PARSE_FAILED", "message": str(e), "detail": {}},
             ) from e
+        finally:
+            _ing.get_conn = _orig_conn
         return {"document": {
             "doc_id": result.doc_id,
             "title": result.title,

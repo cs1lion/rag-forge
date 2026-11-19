@@ -18,7 +18,7 @@ command -v python >/dev/null 2>&1 || { echo "[FATAL] 未找到 python"; exit 1; 
 command -v node >/dev/null 2>&1 || { echo "[FATAL] 未找到 node"; exit 1; }
 command -v ffmpeg >/dev/null 2>&1 || echo "[WARN] 未找到 ffmpeg（视频合成需要）"
 
-PY_VER=$(python -c 'import sys; print(sys.version_info.major * 10 + sys.version_info.minor)')
+PY_VER=$(python -c 'import sys; print(sys.version_info.major * 100 + sys.version_info.minor)')
 if [ "$PY_VER" -lt 311 ]; then
   echo "[FATAL] 需要 Python 3.11+，当前 $(python --version)"
   exit 1
@@ -61,7 +61,8 @@ mkdir -p backend/storage/uploads backend/storage/videos logs
 # ── 5. 端口占用处理 ────────────────────────────────────────────
 for PORT in 8000 5173; do
   if command -v netstat >/dev/null 2>&1; then
-    PIDS=$(netstat -ano 2>/dev/null | grep ":$PORT " | grep LISTENING | awk '{print $NF}' | sort -u)
+    # grep 无匹配返回 1，须 || true 兜底（否则 set -e + pipefail 直接退出）
+    PIDS=$(netstat -ano 2>/dev/null | grep ":$PORT " | grep LISTENING | awk '{print $NF}' | sort -u || true)
     if [ -n "$PIDS" ]; then
       echo "[PORT] 端口 $PORT 被占用（PID: $PIDS），尝试释放 ..."
       for P in $PIDS; do taskkill //PID "$P" //F >/dev/null 2>&1 || true; done
