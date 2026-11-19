@@ -28,7 +28,7 @@
 ## 三、工程铁律（Hard Rules）
 
 1. **严禁 Mock 数据。** 任何测试、演示、截图都不得使用伪造的问答结果或伪造的视频文件
-   冒充系统产出。测试数据必须走真实入库→检索→问答链路生成，或使用 `知识库/` 真实文档。
+   冒充系统产出。测试数据必须走真实入库→检索→问答链路生成，使用真实文档。
 2. **全局单并发视频队列锁。** `video_tasks` 同一时刻 `running` 状态的任务数 ≤ 1；
    新任务必须进入 `queued` 排队，由调度器按 FIFO 提升。禁止绕过锁直接起第二条合成线程。
 3. **核心业务逻辑单元测试覆盖率 ≥ 85%。** 覆盖对象至少包括：解析器（含注入隔离）、
@@ -47,7 +47,7 @@
 - **前端开发 Agent、后端开发 Agent 严禁读取 `docs/EVAL.md`**，也不得读取任何从
   `docs/EVAL.md` 派生的文件（含答案、期望输出、评分脚本的期望断言）。
 - 前端/后端 Agent 只能依据 `docs/API_SPEC.md`、`docs/ARCHITECTURE.md`、`DESIGN.md`、
-  `design/tokens.*` 与 `知识库/` 真实文档进行开发。
+  `design/tokens.*` 与真实文档进行开发。
 - **Eval 验收 Agent** 是唯一允许读取 `docs/EVAL.md` 的角色；其产出（验收报告）
   只允许写入 `evals/reports/`，且报告中不得反向泄露用例答案到开发 Agent 可读区域。
 - 任何"为了通过某个用例而修改通用逻辑"的行为视为过拟合，违反即退回重做。
@@ -58,13 +58,13 @@
 | --- | --- | --- | --- | --- |
 | **架构 / 编排（本 Session）** | 全部 | 根、`docs/`、`design/`、`CLAUDE.md` | — | — |
 | **前端开发 Agent** | `DESIGN.md`、`design/tokens.css`、`design/tokens.json`、`docs/API_SPEC.md`、`CLAUDE.md` | `frontend/` | **`docs/EVAL.md`**、`evals/`、`backend/app/`、`backend/tests/` | `backend/`、`docs/`、`design/`、`evals/` |
-| **后端开发 Agent** | `docs/ARCHITECTURE.md`、`docs/API_SPEC.md`、`CLAUDE.md`、`知识库/`（只读语料） | `backend/app/`、`backend/tests/`、`scripts/` | **`docs/EVAL.md`**、`evals/`、`frontend/` | `frontend/`、`docs/`、`design/`、`evals/` |
+| **后端开发 Agent** | `docs/ARCHITECTURE.md`、`docs/API_SPEC.md`、`CLAUDE.md`、语料目录（只读） | `backend/app/`、`backend/tests/`、`scripts/` | **`docs/EVAL.md`**、`evals/`、`frontend/` | `frontend/`、`docs/`、`design/`、`evals/` |
 | **Eval 验收 Agent** | `docs/EVAL.md`、`docs/API_SPEC.md`、`CLAUDE.md` | `evals/`、`evals/reports/` | —（可全读，但只写评估产物） | `backend/app/`、`frontend/`（只报告不实现） |
 
 补充约定：
 
 - 目录修改禁区以"严禁写入"列为准；跨区改动必须经架构角色评审。
-- `知识库/` 为只读语料（`知识库_文本版/` 派生语料已于 Session 2 删除），任何 Agent 不得改写原文。
+- 语料目录为只读语料（`知识库_文本版/` 派生语料已于 Session 2 删除），任何 Agent 不得改写原文。
 - `.env` 为本地密钥，任何 Agent 不得提交、不得在日志中打印。
 
 ## 六、提交规范

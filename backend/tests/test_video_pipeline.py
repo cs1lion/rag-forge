@@ -34,6 +34,9 @@ from app.video_script import (
 )
 
 KB = Path(__file__).resolve().parents[2] / "知识库"
+pytestmark = pytest.mark.skipif(
+    not KB.is_dir(), reason="knowledge corpus not present in this checkout"
+)
 
 
 # ================================================================ 分镜脚本

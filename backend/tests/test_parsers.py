@@ -22,6 +22,9 @@ from app.injection import (
 from app.ingestion import ingest_file
 
 KB = Path(__file__).resolve().parents[2] / "知识库"
+pytestmark = pytest.mark.skipif(
+    not KB.is_dir(), reason="knowledge corpus not present in this checkout"
+)
 
 
 @pytest.fixture()

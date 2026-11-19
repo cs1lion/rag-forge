@@ -23,7 +23,7 @@ bash start.sh --daemon   # 后台：日志 logs/backend.log / logs/frontend.log
 | 后端 API / 健康检查 | http://localhost:8000 （`/health`） |
 | API 文档（FastAPI 自动） | http://localhost:8000/docs |
 
-首次启动后端自动扫描 `知识库/` 真实语料入库（7 篇文档，含 4 篇带注入段落的 docx，入库即隔离）。
+首次启动后端自动扫描语料目录真实文档入库（含注入段落的文档在入库时即隔离）。
 `.env` 需配置真实 `LLM_API_KEY` / `LLM_BASE_URL` / `LLM_MODEL`（OpenAI 兼容协议；Key 只经 `.env` 注入，已 gitignore）。
 
 ## 行为规则
@@ -127,7 +127,6 @@ E16 验证恢复全选后召回与溯源立即恢复。逐题明细见 **`evals/
 ├── CLAUDE.md / DESIGN.md    # 工程宪法 / 设计规范（唯一事实源）
 ├── docs/                    # API_SPEC / ARCHITECTURE / EVAL（盲测）/ SESSION_LOG
 ├── design/                  # tokens.css + tokens.json（55 令牌，三方校验一致）
-├── 知识库/                  # 只读真实语料（7 篇：md×2 / docx×4 / doc×1）
 ├── backend/                 # FastAPI 应用 + tests/（211 单测，93% 覆盖）+ storage/
 ├── frontend/                # React 工作台（100 单测，99.9% 覆盖）
 ├── evals/                   # EDD 运行器 + 评估报告（Eval Agent 专用）

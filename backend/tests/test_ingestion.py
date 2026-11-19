@@ -16,6 +16,9 @@ from app.ingestion import ingest_file, load_initial_corpus, tokenize
 from app.parsers import BlockType, parse_docx, parse_markdown, strip_dir_suffix
 
 KB = Path(__file__).resolve().parents[2] / "知识库"
+pytestmark = pytest.mark.skipif(
+    not KB.is_dir(), reason="knowledge corpus not present in this checkout"
+)
 
 
 # ---------------------------------------------------------------- 解析器

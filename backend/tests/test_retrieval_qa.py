@@ -20,6 +20,9 @@ from app.qa import ANSWER_SCHEMA, SYSTEM_PROMPT, build_context, generate_answer
 from app.retrieval import hybrid_search, tokenize
 
 KB = Path(__file__).resolve().parents[2] / "知识库"
+pytestmark = pytest.mark.skipif(
+    not KB.is_dir(), reason="knowledge corpus not present in this checkout"
+)
 
 
 @pytest.fixture()
