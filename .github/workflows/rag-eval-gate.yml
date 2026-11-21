@@ -15,7 +15,7 @@ jobs:
           python-version: "3.11"
       - name: Install backend dependencies
         run: pip install -r backend/requirements.txt
-      - name: Run offline core test suite (>=85% core coverage & 0-skip gate)
+      - name: Run offline core test suite (>=85% core+parsers coverage & 0-skip gate)
         working-directory: backend
         env:
           PYTHONPATH: .
@@ -24,12 +24,14 @@ jobs:
           tests/test_smoke.py
           tests/test_evolution_p0_p3.py
           tests/test_ci_core_coverage.py
+          tests/test_parsers_offline.py
           --cov=app.config
           --cov=app.db
           --cov=app.embeddings
           --cov=app.faithfulness
           --cov=app.ingestion
           --cov=app.injection
+          --cov=app.parsers
           --cov=app.qa
           --cov=app.qa_stream
           --cov=app.retrieval
