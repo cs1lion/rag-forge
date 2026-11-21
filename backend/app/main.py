@@ -428,7 +428,19 @@ def create_app() -> FastAPI:
         return event_stream_gen(gen())
 
     # ------------------------------------------------------------- SSE 通道
+    @app.post("/api/qa/stream")
+    async def ask_stream(req: AskReq):
+        from fastapi.responses import StreamingResponse
+        from .qa_stream import stream_guarded_answer
 
+    doc_ids = req.selected_doc_ids if req.selected_doc_ids is not None else req.doc_ids
+    hits = hybrid_search(req.question, top_k=settings.retrieval_top_k, doc_ids=doc_ids)
+    return StreamingResponse(
+        stream_guarded_answer(req.question, hits),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+    
     @app.get("/api/events")
     async def events(request):
         return await event_stream(request)
