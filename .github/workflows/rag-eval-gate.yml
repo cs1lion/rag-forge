@@ -17,6 +17,8 @@ jobs:
         run: pip install -r backend/requirements.txt
       - name: Run backend pytest suite
         working-directory: backend
-        run: pytest -q --cov=app
+        env:
+          PYTHONPATH: .
+        run: python -m pytest -q --cov=app
       - name: Run L1 deterministic RAG eval gate
         run: python3 evals/l1_gate.py
