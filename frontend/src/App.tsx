@@ -2,28 +2,69 @@
  * 编辑型工作台三栏布局（DESIGN.md §5）：
  * 顶栏 56px；左栏 260px（可折叠）、中栏 max-width 720px 居中、右栏 300px。
  * 层次靠 1px 描边与留白承担，无阴影、无渐变、无面性图标。
- * 历史问答收起侧栏列表，统一由顶栏右上「历史」按钮弹出抽屉查看（会话 4）。
+ *
+ * 工作室级体验打磨：
+ * 1. 动态生成基于当前已入库文档的示例问题（淘汰已删除演示语料的硬编码提问）；
+ * 2. 全局快捷键：Cmd/Ctrl+B 折叠文档栏、Cmd/Ctrl+H 呼出历史抽屉、Esc 关闭抽屉；
+ * 3. 中栏接入 DESIGN.md 令牌原生 EvidenceXRay 证据透视面板；
+ * 4. 右栏视频工作室顶部增加状态胶囊与活跃/排队任务一键协作式取消（POST /api/video-tasks/{id}/cancel）。
  */
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { TopBar } from "./components/TopBar";
 import { Sidebar } from "./components/Sidebar";
 import { MainPanel } from "./components/MainPanel";
 import { VideoPanel } from "./components/VideoPanel";
 import { HistoryDrawer } from "./components/HistoryDrawer";
+import { EvidenceXRay } from "./components/EvidenceXRay";
 import { Icon } from "./components/Icon";
 import { useWorkbench } from "./hooks/useWorkbench";
 import type { VideoTask } from "./types";
 
-const EXAMPLE_QUESTIONS = [
-  "众赢科技 2025 年研发投入占营收比重是多少？",
-  "澎湃教育的主营业务有哪些？",
-  "未来在线的信息技术服务面向哪些行业？",
+const FALLBACK_EXAMPLES = [
+  "总结当前知识库中最关键的制度与核心指标",
+  "对比已选文档中的主要约束条件与适用范围",
+  "列出文档中涉及的风险提示、异常条款或边界要求",
 ];
 
 export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [uploading, setUploading] = useState(false);
+  const [cancellingId, setCancellingId] = useState<number | null>(null);
   const wb = useWorkbench();
+
+  // 根据当前知识库文档动态生成示例问题，避免硬编码过期语料实体
+  const exampleQuestions = useMemo(() => {
+    if (!wb.documents.length) {
+      return FALLBACK_EXAMPLES;
+    }
+    const first = wb.documents[0]?.title || wb.documents[0]?.source_file;
+    const second = wb.documents[1]?.title || wb.documents[1]?.source_file;
+    const list = [`请总结《${first}》的核心要点与关键数据`];
+    if (second) {
+      list.push(`对比《${first}》与《${second}》中的核心条款差异`);
+    } else {
+      list.push(`《${first}》中有哪些明确的数值标准或边界约束？`);
+    }
+    list.push("知识库中是否包含需要特别注意的风险提示或限制条件？");
+    return list;
+  }, [wb.documents]);
+
+  // 工作室级全局快捷键（Cmd/Ctrl+B 折叠侧栏、Cmd/Ctrl+H 历史抽屉、Esc 关闭抽屉）
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "b") {
+        e.preventDefault();
+        setSidebarOpen((v) => !v);
+      } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "h") {
+        e.preventDefault();
+        wb.setHistoryOpen(!wb.historyOpen);
+      } else if (e.key === "Escape" && wb.historyOpen) {
+        wb.setHistoryOpen(false);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [wb.historyOpen, wb.setHistoryOpen]);
 
   const activeVideoTaskId = wb.activeVideoTaskId;
   const sortedTasks: VideoTask[] = [...wb.videoTasks].sort((a, b) => {
@@ -32,6 +73,19 @@ export default function App() {
     if (r !== 0) return r;
     return b.id - a.id;
   });
+
+  const cancellableTask = sortedTasks.find(
+    (t) => t.status === "running" || t.status === "queued"
+  );
+
+  const handleCancelActiveTask = async (taskId: number) => {
+    setCancellingId(taskId);
+    try {
+      await fetch(`/api/video-tasks/${taskId}/cancel`, { method: "POST" });
+    } finally {
+      setCancellingId(null);
+    }
+  };
 
   return (
     <div
@@ -47,7 +101,7 @@ export default function App() {
       <TopBar
         sidebarOpen={sidebarOpen}
         onToggleSidebar={() => setSidebarOpen((v) => !v)}
-        onCreate={() => wb.ask(EXAMPLE_QUESTIONS[0] ?? "")}
+        onCreate={() => wb.ask(exampleQuestions[0] ?? "")}
         onOpenHistory={() => wb.setHistoryOpen(true)}
       />
 
@@ -95,7 +149,7 @@ export default function App() {
       ) : null}
 
       <div className="flex min-h-0 flex-1" style={{ height: "calc(100vh - 56px)" }}>
-        {/* 左栏 260px：文档库（历史问答已迁至顶栏抽屉） */}
+        {/* 左栏 260px：文档库 */}
         <aside
           style={{
             width: sidebarOpen ? 260 : 0,
@@ -126,9 +180,9 @@ export default function App() {
           </div>
         </aside>
 
-        {/* 中栏：问答主区，max-width 720px 居中 */}
+        {/* 中栏：问答主区 + 证据透视 X-Ray，max-width 720px 居中 */}
         <main
-          className="flex min-w-0 flex-1 items-start justify-center overflow-y-auto"
+          className="flex min-w-0 flex-1 flex-col items-center overflow-y-auto"
           style={{ padding: "var(--space-24)" }}
         >
           <MainPanel
@@ -143,11 +197,12 @@ export default function App() {
             confidence={wb.confidence}
             error={null}
             onAsk={wb.ask}
-            examples={EXAMPLE_QUESTIONS}
+            examples={exampleQuestions}
           />
+          {wb.citations.length > 0 ? <EvidenceXRay citations={wb.citations} /> : null}
         </main>
 
-        {/* 右栏 300px：视频工作室 */}
+        {/* 右栏 300px：视频工作室 + 状态胶囊与一键取消 */}
         <aside
           style={{
             width: 300,
@@ -155,30 +210,81 @@ export default function App() {
             backgroundColor: "var(--nb-bg-subtle)",
             borderLeft: "var(--border-width) solid var(--nb-border)",
             padding: "var(--space-16)",
+            display: "flex",
+            flexDirection: "column",
           }}
         >
           <div
+            className="flex items-center justify-between"
+            style={{ marginBottom: "var(--space-12)", gap: "var(--space-8)" }}
+          >
+            <div className="flex items-center" style={{ gap: "var(--space-8)" }}>
+              <span
+                style={{
+                  fontSize: "var(--text-section-title-size)",
+                  lineHeight: "var(--text-section-title-line-height)",
+                  fontWeight: "var(--text-section-title-weight)",
+                  color: "var(--nb-text)",
+                }}
+              >
+                视频工作室
+              </span>
+              {wb.runningCount > 0 ? (
+                <span
+                  className="nb-pill"
+                  style={{
+                    backgroundColor: "var(--nb-tint-teal-bg)",
+                    color: "var(--nb-tint-teal-ink)",
+                  }}
+                >
+                  合成中
+                </span>
+              ) : null}
+            </div>
+
+            {cancellableTask ? (
+              <button
+                type="button"
+                className="nb-ghost-btn"
+                disabled={cancellingId === cancellableTask.id}
+                onClick={() => handleCancelActiveTask(cancellableTask.id)}
+              >
+                {cancellingId === cancellableTask.id ? "取消中…" : "取消任务"}
+              </button>
+            ) : null}
+          </div>
+
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            <VideoPanel
+              tasks={sortedTasks}
+              runningCount={wb.runningCount}
+              activeTaskId={activeVideoTaskId}
+              onDeleteTask={wb.removeVideoTask}
+              onPlayTask={wb.playVideoTask}
+            />
+          </div>
+
+          <div
+            className="flex items-center justify-between"
             style={{
-              fontSize: "var(--text-section-title-size)",
-              lineHeight: "var(--text-section-title-line-height)",
-              fontWeight: "var(--text-section-title-weight)",
-              color: "var(--nb-text)",
-              marginBottom: "var(--space-8)",
+              marginTop: "var(--space-12)",
+              paddingTop: "var(--space-8)",
+              borderTop: "var(--border-width) solid var(--nb-border)",
+              fontSize: 11,
+              color: "var(--nb-text-tertiary)",
             }}
           >
-            视频工作室
+            <span>
+              侧栏 <kbd className="nb-kbd">⌘B</kbd>
+            </span>
+            <span>
+              历史 <kbd className="nb-kbd">⌘H</kbd>
+            </span>
           </div>
-          <VideoPanel
-            tasks={sortedTasks}
-            runningCount={wb.runningCount}
-            activeTaskId={activeVideoTaskId}
-            onDeleteTask={wb.removeVideoTask}
-            onPlayTask={wb.playVideoTask}
-          />
         </aside>
       </div>
 
-      {/* 历史问答抽屉（右上角按钮触发） */}
+      {/* 历史问答抽屉（右上角按钮或 Cmd/Ctrl+H 触发） */}
       <HistoryDrawer
         open={wb.historyOpen}
         records={wb.qaRecords}
