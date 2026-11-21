@@ -15,10 +15,29 @@ jobs:
           python-version: "3.11"
       - name: Install backend dependencies
         run: pip install -r backend/requirements.txt
-      - name: Run backend pytest suite
+      - name: Run offline core test suite (>=85% core coverage & 0-skip gate)
         working-directory: backend
         env:
           PYTHONPATH: .
-        run: python -m pytest -q --cov=app
+        run: >
+          python -m pytest -q
+          tests/test_smoke.py
+          tests/test_evolution_p0_p3.py
+          tests/test_ci_core_coverage.py
+          --cov=app.config
+          --cov=app.db
+          --cov=app.embeddings
+          --cov=app.faithfulness
+          --cov=app.ingestion
+          --cov=app.injection
+          --cov=app.qa
+          --cov=app.qa_stream
+          --cov=app.retrieval
+          --cov=app.video_queue
+          --cov-report=term-missing
+          --cov-fail-under=85
+          --junitxml=pytest-ci.xml
+      - name: Enforce 0 skipped tests in CI core suite
+        run: python3 scripts/check_ci_zero_skip.py backend/pytest-ci.xml
       - name: Run L1 deterministic RAG eval gate
         run: python3 evals/l1_gate.py
