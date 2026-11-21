@@ -1,3 +1,11 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="./assets/hero-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="./assets/hero-light.svg">
+    <img alt="rag-forge — Full-Stack RAG &amp; Automated Q&amp;A Video Workbench" src="./assets/hero-dark.svg" width="100%">
+  </picture>
+</p>
+
 # 知识库问答与自动问答视频生成工作台（rag-forge）
 
 上传文档（`.md` / `.docx` / `.doc`）→ **SQLite FTS5 + 可选本地向量 RRF 混合检索** → LLM 问答（强制四维引用溯源 + **三层纵深防注入** + **声明级忠实度验真** + SSE 流式输出）→ 自动生成问答视频（大模型分镜 + edge-tts 配音 + Remotion/PIL 渲染 + ffmpeg 合成）。**全局单并发视频队列**：同一时刻只合成一个视频，其余 FIFO 排队，具备超时熔断、有限次重试与协作式取消，SSE 实时推送双进度。
