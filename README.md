@@ -59,6 +59,11 @@ evals/     l1_gate.py（零 LLM 成本 L1 确定性评测门禁，接入 GitHub 
 
 ```
 
+### Design Decisions & Non-Goals
+- **Why local BM25 + TF-IDF with evidence rotation**: Pure dense embeddings often drop exact rare terms and entity names. Local hybrid sparse retrieval plus subquery decomposition keeps recall fast, deterministic, and debuggable on SQLite.
+- **Why refusal hard-skips the video queue**: Rendering video from an ungrounded or injection-tainted answer wastes compute and amplifies hallucinations. Dual prompt-injection defense (XML isolation + System Prompt rules) gates downstream rendering.
+- **Non-Goal**: High-concurrency video rendering without state durability — a global `asyncio.Lock` paired with SQLite task states enforces FIFO execution and restart recovery.
+
 ## 核心技术选型与权衡
 
 | 模块 | 选型 | 为什么这么选 / 关键权衡 | 
