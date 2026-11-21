@@ -1,0 +1,22 @@
+name: RAG-Forge L1 Eval & Hardening Gate
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+jobs:
+  backend-eval-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install backend dependencies
+        run: pip install -r backend/requirements.txt
+      - name: Run backend pytest suite
+        working-directory: backend
+        run: pytest -q --cov=app
+      - name: Run L1 deterministic RAG eval gate
+        run: python3 evals/l1_gate.py

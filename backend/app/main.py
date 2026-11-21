@@ -21,6 +21,7 @@ from .db import get_conn, init_db
 from .ingestion import ingest_file, load_initial_corpus
 from .sse import event_stream, on_video_progress
 from .video_queue import (
+    cancel_video_task,
     SKIP_STAGE_TEXT,
     enqueue_skipped,
     enqueue_video,
@@ -513,6 +514,14 @@ def create_app() -> FastAPI:
         if t is None:
             return {"error": {"code": "E_NOT_FOUND", "message": "任务不存在"}}
         return {"task": _task_row(t)}
+
+    @app.post("/api/video-tasks/{task_id}/cancel")
+    def cancel_task(task_id: int):
+        with get_conn() as conn:
+            task = cancel_video_task(conn, task_id)
+        if task is None:
+            raise HTTPException(status_code=404, detail="视频任务不存在")
+        return task
 
     @app.delete("/api/video-tasks/{task_id}", status_code=204)
     def delete_video_task(task_id: int):

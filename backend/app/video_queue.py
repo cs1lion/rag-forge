@@ -1,11 +1,15 @@
-"""全局单并发视频合成队列（ARCHITECTURE §6 / CLAUDE.md 铁律 2）。
+"""全局单并发视频合成队列 (ARCHITECTURE §6 / CLAUDE.md 铁律 2)。
 
 - 同一时刻 running ≤ 1：由 asyncio.Lock + DB 状态双保险；
 - FIFO：queued 按 created_at 提升；
 - 启动恢复：残留 running → queued，所有 queued 按 created_at 升序重建内存队列，
   防止服务重启导致任务永久卡死；
 - 拒答跳过：知识库未命中时不进入耗时合成，任务直接标记 skipped；
-- SSE 进度经 on_progress 回调推送（qa.progress / video.progress）。
+- P0 高可用加固：
+  1. 单任务超时熔断（asyncio.wait_for + settings.video_task_timeout_seconds），
+     防止 ffmpeg / edge-tts 卡死拖垮整个单并发队列；
+  2. 有限次重试（attempt_count <= settings.video_task_max_retries），超限落盘 failed；
+  3. 协作式任务取消（cancel_video_task）：支持 queued 秒级取消与 running 中断落盘 cancelled。
 """
 from __future__ import annotations
 
@@ -13,16 +17,18 @@ import asyncio
 import json
 from datetime import datetime, timezone
 
+from .config import settings
 from .db import get_conn
 from .video import render_qa_video
 
 # 拒答跳过视频生成时的说明（写入 video_tasks.stage_text）
 SKIP_STAGE_TEXT = "知识库未命中，已跳过视频生成"
+CANCEL_STAGE_TEXT = "用户已取消视频生成"
 
 _lock: asyncio.Lock | None = None
-# 内存队列：启动恢复与新增任务都会推入 task_id。
-# DB 仍是唯一事实源；该队列用于"有任务待处理"的唤醒信号与重启后重建可见性。
 _pending: asyncio.Queue[int] | None = None
+# 当前正在执行的渲染协程句柄（用于 running 状态下的协作式取消）
+_active_tasks: dict[int, asyncio.Task] = {}
 
 
 def video_lock() -> asyncio.Lock:
@@ -41,13 +47,13 @@ def pending_queue() -> asyncio.Queue[int]:
 
 
 def reset_pending_queue() -> None:
-    """重置内存队列（测试隔离用）。"""
+    """重置内存队列与活跃任务句柄（测试隔离用）。"""
     global _pending
     _pending = None
+    _active_tasks.clear()
 
 
 def _push_pending(task_id: int) -> None:
-    # put_nowait 不需要事件循环绑定，跨测试/跨循环安全
     pending_queue().put_nowait(task_id)
 
 
@@ -68,10 +74,10 @@ def _utcnow() -> str:
 
 
 async def enqueue_video(conn, qa_record_id: int) -> dict:
-    """把视频任务加入队列（queued），返回任务行。不立即执行。"""
+    """把视频任务加入队列 (queued)，返回任务行。不立即执行。"""
     cur = conn.execute(
-        "INSERT INTO video_tasks (qa_record_id, status, progress, created_at)"
-        " VALUES (?, 'queued', 0.0, ?)",
+        "INSERT INTO video_tasks (qa_record_id, status, progress, attempt_count,"
+        " cancel_requested, created_at) VALUES (?, 'queued', 0.0, 0, 0, ?)",
         (qa_record_id, _utcnow()),
     )
     conn.commit()
@@ -94,14 +100,42 @@ async def enqueue_skipped(
     return get_task(conn, cur.lastrowid)
 
 
-def restore_queue(conn) -> list[int]:
-    """服务启动恢复：running → queued，并按 created_at 升序重建内存队列。
+def cancel_video_task(
+    conn, task_id: int, stage_text: str = CANCEL_STAGE_TEXT
+) -> dict | None:
+    """取消指定视频任务（支持 queued 与 running，终态任务幂等返回）。"""
+    task = get_task(conn, task_id)
+    if task is None:
+        return None
+    status = task["status"]
+    if status in ("done", "failed", "skipped", "cancelled"):
+        return task
+    if status == "queued":
+        now = _utcnow()
+        conn.execute(
+            "UPDATE video_tasks SET status='cancelled', stage='cancelled',"
+            " stage_text=?, cancel_requested=1, finished_at=? WHERE id=?",
+            (stage_text, now, task_id),
+        )
+        conn.commit()
+        return get_task(conn, task_id)
+    # status == 'running'：写取消标记并通知正在运行的渲染协程中断
+    conn.execute(
+        "UPDATE video_tasks SET cancel_requested=1, stage_text=? WHERE id=?",
+        (stage_text, task_id),
+    )
+    conn.commit()
+    active = _active_tasks.get(task_id)
+    if active is not None and not active.done():
+        active.cancel()
+    return get_task(conn, task_id)
 
-    返回重新入队的 task_id 列表（按 FIFO 顺序）。
-    """
+
+def restore_queue(conn) -> list[int]:
+    """服务启动恢复：running → queued，并按 created_at 升序重建内存队列。"""
     conn.execute(
         "UPDATE video_tasks SET status='queued', progress=0.0, stage='',"
-        " stage_text=NULL, started_at=NULL WHERE status='running'"
+        " stage_text=NULL, cancel_requested=0, started_at=NULL WHERE status='running'"
     )
     conn.commit()
     rows = conn.execute(
@@ -131,82 +165,181 @@ def queued_tasks(conn) -> list[dict]:
     return [dict(r) for r in rows]
 
 
-async def run_dispatcher(app, on_progress) -> None:
-    """后台调度：取 queued → 持锁合成 → 更新状态。永不停止（lifespan 内运行）。
+def _is_cancel_requested(conn, task_id: int) -> bool:
+    row = conn.execute(
+        "SELECT cancel_requested, status FROM video_tasks WHERE id = ?", (task_id,)
+    ).fetchone()
+    if row is None:
+        return True
+    return bool(row["cancel_requested"]) or row["status"] == "cancelled"
 
-    on_progress(task_id, stage, progress) 由调用方（SSE 广播）提供。
+
+async def process_one_task(
+    app,
+    on_progress,
+    *,
+    db_path=None,
+    timeout_seconds: float | None = None,
+    max_retries: int | None = None,
+) -> bool:
+    """执行队列中的下一条 queued 任务（返回 True 表示处理了任务，False 表示队列为空）。
+
+    拆出单步执行函数便于单元测试直接覆盖超时熔断、有限次重试与协作式取消。
     """
-    while True:
-        try:
-            # 内存队列仅作唤醒信号；任务取自 DB（唯一事实源），避免重复处理
-            drain_pending()
-            await asyncio.sleep(0.5)
-            with get_conn() as conn:
-                task = conn.execute(
-                    "SELECT * FROM video_tasks WHERE status = 'queued'"
-                    " ORDER BY created_at, id LIMIT 1"
-                ).fetchone()
-                if task is None:
-                    continue
+    with get_conn(db_path) as conn:
+        task = conn.execute(
+            "SELECT * FROM video_tasks WHERE status = 'queued'"
+            " ORDER BY created_at, id LIMIT 1"
+        ).fetchone()
+        if task is None:
+            return False
+        attempt = int(task["attempt_count"] or 0) + 1
+        conn.execute(
+            "UPDATE video_tasks SET status='running', started_at=?, progress=0.0,"
+            " stage='', attempt_count=? WHERE id=?",
+            (_utcnow(), attempt, task["id"]),
+        )
+        conn.commit()
+
+    task_id = task["id"]
+    with get_conn(db_path) as conn:
+        qa = conn.execute(
+            "SELECT * FROM qa_records WHERE id = ?", (task["qa_record_id"],)
+        ).fetchone()
+    if qa is None:
+        with get_conn(db_path) as conn:
+            conn.execute(
+                "UPDATE video_tasks SET status='failed', error=?, finished_at=? WHERE id=?",
+                ("qa_record 不存在", _utcnow(), task_id),
+            )
+            conn.commit()
+        on_progress(task_id, "failed", 1.0)
+        return True
+
+    timeout = (
+        float(timeout_seconds)
+        if timeout_seconds is not None
+        else float(getattr(settings, "video_task_timeout_seconds", 180))
+    )
+    retry_limit = (
+        int(max_retries)
+        if max_retries is not None
+        else int(getattr(settings, "video_task_max_retries", 1))
+    )
+
+    # 铁律 2 双保险：asyncio.Lock (全局单并发) + DB running 状态约束。
+    async with video_lock():
+        out = app.state.video_dir / f"qa_{task['qa_record_id']}_t{task_id}.mp4"
+        citations = json.loads(qa["citations"] or "[]")
+
+        def prog(stage, pct):
+            with get_conn(db_path) as conn:
+                if _is_cancel_requested(conn, task_id):
+                    return
                 conn.execute(
-                    "UPDATE video_tasks SET status='running', started_at=?, progress=0.0,"
-                    " stage='' WHERE id=?",
-                    (_utcnow(), task["id"]),
+                    "UPDATE video_tasks SET progress=?, stage=? WHERE id=?",
+                    (round(pct, 4), stage, task_id),
                 )
                 conn.commit()
-            qa = None
-            with get_conn() as conn:
-                qa = conn.execute(
-                    "SELECT * FROM qa_records WHERE id = ?", (task["qa_record_id"],)
-                ).fetchone()
-            if qa is None:
-                with get_conn() as conn:
+            on_progress(task_id, stage, pct)
+
+        render_coro = render_qa_video(
+            question=qa["question"],
+            answer=json.loads(qa["answer"]).get("answer", ""),
+            citations=citations,
+            out_path=out,
+            on_progress=prog,
+        )
+        render_task = asyncio.create_task(render_coro)
+        _active_tasks[task_id] = render_task
+        try:
+            await asyncio.wait_for(render_task, timeout=timeout)
+            with get_conn(db_path) as conn:
+                if _is_cancel_requested(conn, task_id):
                     conn.execute(
-                        "UPDATE video_tasks SET status='failed', error=? WHERE id=?",
-                        ("qa_record 不存在", task["id"]),
+                        "UPDATE video_tasks SET status='cancelled', stage='cancelled',"
+                        " stage_text=?, finished_at=? WHERE id=?",
+                        (CANCEL_STAGE_TEXT, _utcnow(), task_id),
                     )
                     conn.commit()
-                continue
-            # 铁律 2 双保险：asyncio.Lock（全局单并发）+ DB running 状态约束。
-            # 锁内完成整个合成任务，物理层面同一时刻活跃视频任务数 ≤ 1。
-            async with video_lock():
-                try:
-                    out = app.state.video_dir / f"qa_{task['qa_record_id']}_t{task['id']}.mp4"
-                    citations = json.loads(qa["citations"] or "[]")
-
-                    def prog(stage, pct):
-                        with get_conn() as conn:
-                            conn.execute(
-                                "UPDATE video_tasks SET progress=?, stage=? WHERE id=?",
-                                (round(pct, 4), stage, task["id"]),
-                            )
-                            conn.commit()
-                        on_progress(task["id"], stage, pct)
-
-                    result = await render_qa_video(
-                        question=qa["question"],
-                        answer=json.loads(qa["answer"]).get("answer", ""),
-                        citations=citations,
-                        out_path=out,
-                        on_progress=prog,
+                    on_progress(task_id, "cancelled", 1.0)
+                else:
+                    conn.execute(
+                        "UPDATE video_tasks SET status='done', progress=1.0,"
+                        " video_path=?, error=NULL, finished_at=? WHERE id=?",
+                        (str(out), _utcnow(), task_id),
                     )
-                    with get_conn() as conn:
-                        conn.execute(
-                            "UPDATE video_tasks SET status='done', progress=1.0,"
-                            " video_path=?, finished_at=? WHERE id=?",
-                            (str(out), _utcnow(), task["id"]),
-                        )
-                        conn.commit()
-                    on_progress(task["id"], "done", 1.0)
-                except Exception as e:
-                    with get_conn() as conn:
-                        conn.execute(
-                            "UPDATE video_tasks SET status='failed', error=?,"
-                            " finished_at=? WHERE id=?",
-                            (str(e), _utcnow(), task["id"]),
-                        )
-                        conn.commit()
-                    on_progress(task["id"], "failed", 1.0)
+                    conn.commit()
+                    on_progress(task_id, "done", 1.0)
+        except asyncio.CancelledError:
+            with get_conn(db_path) as conn:
+                cancelled = _is_cancel_requested(conn, task_id)
+                if cancelled:
+                    conn.execute(
+                        "UPDATE video_tasks SET status='cancelled', stage='cancelled',"
+                        " stage_text=?, finished_at=? WHERE id=?",
+                        (CANCEL_STAGE_TEXT, _utcnow(), task_id),
+                    )
+                    conn.commit()
+            if cancelled:
+                on_progress(task_id, "cancelled", 1.0)
+            else:
+                raise
+        except asyncio.TimeoutError:
+            err_msg = f"视频渲染超时（>{int(timeout)}s），已触发熔断"
+            if attempt <= retry_limit:
+                with get_conn(db_path) as conn:
+                    conn.execute(
+                        "UPDATE video_tasks SET status='queued', progress=0.0, stage='retrying',"
+                        " stage_text=?, error=?, started_at=NULL WHERE id=?",
+                        (f"渲染超时，正在第 {attempt} 次自动重试", err_msg, task_id),
+                    )
+                    conn.commit()
+                _push_pending(task_id)
+                on_progress(task_id, "retrying", 0.0)
+            else:
+                with get_conn(db_path) as conn:
+                    conn.execute(
+                        "UPDATE video_tasks SET status='failed', stage='timeout', error=?,"
+                        " finished_at=? WHERE id=?",
+                        (err_msg, _utcnow(), task_id),
+                    )
+                    conn.commit()
+                on_progress(task_id, "failed", 1.0)
+        except Exception as e:
+            err_msg = str(e)
+            if attempt <= retry_limit:
+                with get_conn(db_path) as conn:
+                    conn.execute(
+                        "UPDATE video_tasks SET status='queued', progress=0.0, stage='retrying',"
+                        " stage_text=?, error=?, started_at=NULL WHERE id=?",
+                        (f"渲染失败，正在第 {attempt} 次自动重试", err_msg, task_id),
+                    )
+                    conn.commit()
+                _push_pending(task_id)
+                on_progress(task_id, "retrying", 0.0)
+            else:
+                with get_conn(db_path) as conn:
+                    conn.execute(
+                        "UPDATE video_tasks SET status='failed', error=?,"
+                        " finished_at=? WHERE id=?",
+                        (err_msg, _utcnow(), task_id),
+                    )
+                    conn.commit()
+                on_progress(task_id, "failed", 1.0)
+        finally:
+            _active_tasks.pop(task_id, None)
+    return True
+
+
+async def run_dispatcher(app, on_progress) -> None:
+    """后台调度：取 queued → 持锁合成 → 更新状态。永不停止 (lifespan 内运行)。"""
+    while True:
+        try:
+            drain_pending()
+            await asyncio.sleep(0.5)
+            await process_one_task(app, on_progress)
+        except asyncio.CancelledError:
+            raise
         except Exception:
-            # 调度器自身异常不退出循环
             await asyncio.sleep(1)
