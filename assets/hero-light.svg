@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 840 316" width="840" height="316" role="img" aria-label="rag-forge — Full-Stack RAG &amp; Automated Q&amp;A Video Workbench (Light)">
+  <defs>
+    <pattern id="rf-grid-light" width="20" height="20" patternUnits="userSpaceOnUse">
+      <rect x="0" y="0" width="2" height="2" fill="#CBD5E1" opacity="0.55"/>
+    </pattern>
+  </defs>
+  <rect x="0" y="0" width="840" height="316" rx="8" fill="#FFFFFF"/>
+  <rect x="0" y="34" width="840" height="282" rx="8" fill="url(#rf-grid-light)"/>
+  <rect x="1" y="1" width="838" height="314" rx="7" fill="none" stroke="#D0D7DE" stroke-width="1.5"/>
+  <g shape-rendering="crispEdges">
+    <rect x="1" y="1" width="838" height="4" fill="#F6F8FA"/>
+    <rect x="24" y="1" width="136" height="4" fill="#1D4ED8"/>
+    <rect x="168" y="1" width="88" height="4" fill="#0F766E"/>
+    <rect x="264" y="1" width="48" height="4" fill="#B45309"/>
+  </g>
+  <rect x="1" y="5" width="838" height="30" fill="#F6F8FA"/>
+  <line x1="1" y1="35" x2="839" y2="35" stroke="#D0D7DE" stroke-width="1"/>
+  <g shape-rendering="crispEdges">
+    <rect x="18" y="15" width="9" height="9" fill="#CBD5E1"/>
+    <rect x="33" y="15" width="9" height="9" fill="#CBD5E1"/>
+    <rect x="48" y="15" width="9" height="9" fill="#1D4ED8"/>
+  </g>
+  <text x="420" y="24" text-anchor="middle" fill="#475569" font-family="'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace" font-size="12">cs1lion/rag-forge — hybrid retrieval &amp; video pipeline</text>
+  <g shape-rendering="crispEdges">
+    <rect x="28" y="52" width="10" height="10" fill="#1D4ED8"/>
+    <rect x="40" y="52" width="10" height="10" fill="#1D4ED8"/>
+    <rect x="52" y="52" width="10" height="10" fill="#E2E8F0"/>
+    <rect x="28" y="64" width="10" height="10" fill="#0F766E"/>
+    <rect x="40" y="64" width="10" height="10" fill="#B45309"/>
+    <rect x="52" y="64" width="10" height="10" fill="#B45309"/>
+    <rect x="28" y="76" width="10" height="10" fill="#1D4ED8"/>
+    <rect x="40" y="76" width="10" height="10" fill="#0F766E"/>
+    <rect x="52" y="76" width="10" height="10" fill="#E2E8F0"/>
+  </g>
+  <text x="78" y="68" fill="#1D4ED8" font-family="'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace" font-size="16" font-weight="700">rag-forge</text>
+  <text x="78" y="88" fill="#475569" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13">Full-stack knowledge-base Q&amp;A workbench with citation tracing, injection defense &amp; automated video queue.</text>
+  <line x1="28" y1="104" x2="812" y2="104" stroke="#E2E8F0" stroke-width="1"/>
+  <text x="28" y="128" fill="#475569" font-family="'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace" font-size="12.5" font-weight="600">RETRIEVAL</text>
+  <text x="122" y="128" fill="#0F172A" font-family="'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace" font-size="12.5">Local BM25 + TF-IDF · Subquery decomposition · Rare-term evidence rotation</text>
+  <text x="28" y="152" fill="#475569" font-family="'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace" font-size="12.5" font-weight="600">SECURITY</text>
+  <text x="122" y="152" fill="#0F766E" font-family="'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace" font-size="12.5" font-weight="600">XML isolation + System Prompt defense · Strict JSON Schema · Refusal skips video</text>
+  <text x="28" y="176" fill="#475569" font-family="'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace" font-size="12.5" font-weight="600">PIPELINE</text>
+  <text x="122" y="176" fill="#0F172A" font-family="'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace" font-size="12.5">FastAPI + SQLite (4 tables) + React 18 · asyncio.Lock FIFO queue + Remotion/FFmpeg</text>
+  <g shape-rendering="crispEdges">
+    <rect x="28" y="198" width="174" height="42" fill="#F8FAFC" stroke="#64748B" stroke-width="2"/>
+    <rect x="226" y="198" width="174" height="42" fill="#EFF6FF" stroke="#1D4ED8" stroke-width="2"/>
+    <rect x="424" y="198" width="174" height="42" fill="#ECFDF5" stroke="#0F766E" stroke-width="2"/>
+    <rect x="622" y="198" width="190" height="42" fill="#FFFBEB" stroke="#B45309" stroke-width="2"/>
+    <rect x="208" y="216" width="12" height="6" fill="#64748B"/>
+    <rect x="406" y="216" width="12" height="6" fill="#1D4ED8"/>
+    <rect x="604" y="216" width="12" height="6" fill="#0F766E"/>
+  </g>
+  <text x="115" y="224" text-anchor="middle" fill="#1E293B" font-family="'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace" font-size="13" font-weight="700">01 · INGEST</text>
+  <text x="313" y="224" text-anchor="middle" fill="#1E3A8A" font-family="'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace" font-size="13" font-weight="700">02 · HYBRID RAG</text>
+  <text x="511" y="224" text-anchor="middle" fill="#115E59" font-family="'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace" font-size="13" font-weight="700">03 · GUARD &amp; CITE</text>
+  <text x="717" y="224" text-anchor="middle" fill="#92400E" font-family="'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace" font-size="13" font-weight="700">04 · VIDEO QUEUE</text>
+  <line x1="28" y1="258" x2="812" y2="258" stroke="#E2E8F0" stroke-width="1"/>
+  <g shape-rendering="crispEdges">
+    <rect x="28" y="272" width="500" height="8" fill="#1D4ED8"/>
+    <rect x="532" y="272" width="256" height="8" fill="#6D28D9"/>
+    <rect x="792" y="272" width="20" height="8" fill="#94A3B8"/>
+  </g>
+  <text x="28" y="298" fill="#1E3A8A" font-family="'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace" font-size="12" font-weight="600">Python 64.1% (FastAPI / SQLite)</text>
+  <text x="532" y="298" fill="#5B21B6" font-family="'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace" font-size="12" font-weight="600">TypeScript 33.1% (React 18 / Remotion)</text>
+</svg>
